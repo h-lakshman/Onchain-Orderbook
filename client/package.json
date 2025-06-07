@@ -1,0 +1,18 @@
+{
+  "name": "client",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@coral-xyz/borsh": "^0.31.1",
+    "@solana/web3.js": "^1.98.2",
+    "borsh": "^2.0.0",
+    "litesvm": "^0.2.0"
+  }
+}
