@@ -8,23 +8,9 @@ import {
   Transaction,
   TransactionInstruction,
 } from "@solana/web3.js";
-import * as borsh from "@coral-xyz/borsh";
+import BN from "bn.js";
+import { MarketStateSchema, InstructionSchema } from "./types";
 
-const MarketStateSchema = borsh.struct([
-  borsh.publicKey("authority"),
-  borsh.publicKey("baseMint"),
-  borsh.publicKey("quoteMint"),
-  borsh.u64("minOrderSize"),
-  borsh.u64("tickSize"),
-  borsh.u64("nextOrderId"),
-  borsh.bool("isActive"),
-]);
-
-const InitializeMarketInstructionSchema = borsh.struct([
-  borsh.u8("variant"),
-  borsh.u64("min_order_size"),
-  borsh.u64("tick_size"),
-]);
 
 test("Initialize market", async () => {
   const svm = new LiteSVM();
@@ -32,7 +18,7 @@ test("Initialize market", async () => {
   const programId = Keypair.generate();
   svm.addProgramFromFile(
     programId.publicKey,
-    "../program/target/deploy/program.so"
+    `${process.env.program_path}`
   );
   const baseAsset = new PublicKey(
     "So11111111111111111111111111111111111111112"
@@ -48,15 +34,16 @@ test("Initialize market", async () => {
     programId.publicKey
   );
 
-  const minOrderSize = 1_000_000n;
-  const tickSize = 1_000n;
+  const minOrderSize = new BN(1_000_000);
+  const tickSize = new BN(1_000);
 
   const dataBuffer = Buffer.alloc(17);
-  InitializeMarketInstructionSchema.encode(
+  InstructionSchema.encode(
     {
-      variant: 0,
-      min_order_size: minOrderSize,
-      tick_size: tickSize,
+      InitializeMarket: {
+        min_order_size: minOrderSize,
+        tick_size: tickSize,
+      },
     },
     dataBuffer
   );
@@ -103,21 +90,25 @@ test("Initialize market", async () => {
   const marketAccount = svm.getAccount(marketAccountPda);
   expect(marketAccount).toBeDefined();
 
-  const marketState = MarketStateSchema.decode(marketAccount!.data);
+  const accountData = Buffer.from(marketAccount!.data);
+  const marketState = MarketStateSchema.decode(accountData);
 
   expect(marketState.authority.equals(authority.publicKey)).toBeTrue();
   expect(marketState.baseMint.equals(baseAsset)).toBeTrue();
   expect(marketState.quoteMint.equals(quoteAsset)).toBeTrue();
-  expect(marketState.minOrderSize).toBe(minOrderSize);
-  expect(marketState.tickSize).toBe(tickSize);
-  expect(marketState.nextOrderId).toBe(1n);
+  expect(marketState.minOrderSize.eq(minOrderSize)).toBeTrue();
+  expect(marketState.tickSize.eq(tickSize)).toBeTrue();
+  expect(marketState.nextOrderId.eq(new BN(1))).toBeTrue();
   expect(marketState.isActive).toBeTrue();
 
-  console.log("✅ Market initialized successfully!");
+  console.log("Market initialized successfully!");
   console.log("Market State:", {
-    ...marketState,
     authority: marketState.authority.toBase58(),
     baseMint: marketState.baseMint.toBase58(),
     quoteMint: marketState.quoteMint.toBase58(),
+    minOrderSize: marketState.minOrderSize.toString(),
+    tickSize: marketState.tickSize.toString(),
+    nextOrderId: marketState.nextOrderId.toString(),
+    isActive: marketState.isActive,
   });
 });
