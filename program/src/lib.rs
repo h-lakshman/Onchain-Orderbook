@@ -5,6 +5,7 @@ use solana_program::{
 };
 
 mod initialize_market;
+mod state;
 use initialize_market::process_initialize_market;
 
 #[derive(BorshSerialize, BorshDeserialize, Debug)]
@@ -19,7 +20,7 @@ fn process_instruction(
     accounts: &[AccountInfo],
     instruction_data: &[u8],
 ) -> ProgramResult {
-    msg!("Orderbook program entrypoint");
+    msg!("Orderbook program");
 
     let instruction = Instruction::try_from_slice(instruction_data)
         .map_err(|_| ProgramError::InvalidInstructionData)?;
