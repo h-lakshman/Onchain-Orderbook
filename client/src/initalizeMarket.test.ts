@@ -186,6 +186,18 @@ test("Initialize market", async () => {
   
   if (result && typeof result === 'object' && 'err' in result) {
     console.error("Transaction failed:", result);
+    
+    const metaData = result.meta();
+    if (metaData && metaData.logs) {
+      const logs = metaData.logs();
+      if (Array.isArray(logs)) {
+        console.log("Program logs:");
+        logs.forEach((log: string, index: number) => {
+          console.log(`${index + 1}: ${log}`);
+        });
+      }
+    }
+    
     throw new Error("Transaction failed");
   }
   
