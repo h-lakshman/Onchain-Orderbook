@@ -1,30 +1,42 @@
-import * as borsh from "@coral-xyz/borsh";
+import {
+  struct,
+  u8,
+  u16,
+  u64,
+  publicKey,
+  bool,
+  rustEnum,
+} from "@coral-xyz/borsh";
 
-export const MarketStateSchema = borsh.struct([
-    borsh.publicKey("authority"),
-    borsh.publicKey("baseMint"),
-    borsh.publicKey("quoteMint"),
-    borsh.publicKey("feeAccount"),
-    borsh.publicKey("baseVault"),
-    borsh.publicKey("quoteVault"),
-    borsh.publicKey("marketEvents"),
-    borsh.u64("eventHead"),
-    borsh.u64("eventTail"),
-    borsh.u64("minOrderSize"),
-    borsh.u64("tickSize"),
-    borsh.u64("nextOrderId"),
-    borsh.u64("totalEvents"),
-    borsh.u64("lastPrice"),
-    borsh.u64("volume24h"),
-    borsh.u16("feeRateBps"),
-    borsh.u8("bump"),
-    borsh.bool("isInitialized"),
-    
-  ]);
-  
-export const InstructionSchema = borsh.rustEnum([
-    borsh.struct([
-      borsh.u64("min_order_size"),
-      borsh.u64("tick_size"),
-    ], "InitializeMarket"),
-  ]);
+export const MarketStateSchema = struct([
+  publicKey("authority"),
+  publicKey("baseMint"),
+  publicKey("quoteMint"),
+  publicKey("feeAccount"),
+  publicKey("baseVault"),
+  publicKey("quoteVault"),
+  publicKey("marketEvents"),
+  publicKey("bids"),
+  publicKey("asks"),
+  u64("eventHead"),
+  u64("eventTail"),
+  u64("minOrderSize"),
+  u64("tickSize"),
+  u64("nextOrderId"),
+  u64("lastPrice"),
+  u64("volume24h"),
+  u16("feeRateBps"),
+  u8("bump"),
+  bool("isInitialized"),
+]);
+
+const OrderSideSchema = rustEnum([struct([], "Buy"), struct([], "Sell")]);
+
+export const InstructionSchema = rustEnum([
+  struct([u64("min_order_size"), u64("tick_size")], "InitializeMarket"),
+  struct([], "CreateUserBalanceAccount"),
+  struct(
+    [OrderSideSchema.replicate("side"), u64("price"), u64("quantity")],
+    "PlaceOrder"
+  ),
+]);
