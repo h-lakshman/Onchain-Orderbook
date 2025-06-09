@@ -12,7 +12,7 @@ use solana_program::{
 };
 use spl_token::instruction as token_instruction;
 
-use crate::state::{MarketEvents, MarketState, MAX_EVENTS};
+use crate::state::{MarketEvents, MarketState, OrderBook, OrderSide, MAX_EVENTS};
 
 pub fn process_initialize_market(
     program_id: &Pubkey,
@@ -26,6 +26,8 @@ pub fn process_initialize_market(
     let market_info = next_account_info(account_info_iter)?;
     let base_mint_info = next_account_info(account_info_iter)?;
     let quote_mint_info = next_account_info(account_info_iter)?;
+    let bids_info = next_account_info(account_info_iter)?;
+    let asks_info = next_account_info(account_info_iter)?;
     let base_vault_info = next_account_info(account_info_iter)?;
     let quote_vault_info = next_account_info(account_info_iter)?;
     let market_events_info = next_account_info(account_info_iter)?;
@@ -41,6 +43,8 @@ pub fn process_initialize_market(
 
     let accounts_to_validate = [
         (market_info, "Market"),
+        (bids_info, "Bids"),
+        (asks_info, "Asks"),
         (market_events_info, "Market events"),
         (base_vault_info, "Base vault"),
         (quote_vault_info, "Quote vault"),
@@ -83,6 +87,22 @@ pub fn process_initialize_market(
 
     if market_info.key != &market_pda {
         msg!("Invalid market account. Expected PDA: {}", market_pda);
+        return Err(ProgramError::InvalidAccountData);
+    }
+
+    let bids_seeds = &[b"bids", market_pda.as_ref()];
+    let (bids_pda, bids_bump) = Pubkey::find_program_address(bids_seeds, program_id);
+
+    if bids_info.key != &bids_pda {
+        msg!("Invalid bids account. Expected PDA: {}", bids_pda);
+        return Err(ProgramError::InvalidAccountData);
+    }
+
+    let asks_seeds = &[b"asks", market_pda.as_ref()];
+    let (asks_pda, asks_bump) = Pubkey::find_program_address(asks_seeds, program_id);
+
+    if asks_info.key != &asks_pda {
+        msg!("Invalid asks account. Expected PDA: {}", asks_pda);
         return Err(ProgramError::InvalidAccountData);
     }
 
@@ -157,6 +177,48 @@ pub fn process_initialize_market(
                 quote_mint_info.key.as_ref(),
                 &[bump],
             ]],
+        )?;
+    }
+
+    if bids_info.lamports() == 0 {
+        msg!("Creating bids account with {} bytes", OrderBook::MAX_LEN);
+        let bids_rent = rent.minimum_balance(OrderBook::MAX_LEN);
+        let create_bids_ix = system_instruction::create_account(
+            authority_info.key,
+            &bids_pda,
+            bids_rent,
+            OrderBook::MAX_LEN as u64,
+            program_id,
+        );
+        invoke_signed(
+            &create_bids_ix,
+            &[
+                authority_info.clone(),
+                bids_info.clone(),
+                system_program_info.clone(),
+            ],
+            &[&[b"bids", market_pda.as_ref(), &[bids_bump]]],
+        )?;
+    }
+
+    if asks_info.lamports() == 0 {
+        msg!("Creating asks account with {} bytes", OrderBook::MAX_LEN);
+        let asks_rent = rent.minimum_balance(OrderBook::MAX_LEN);
+        let create_asks_ix = system_instruction::create_account(
+            authority_info.key,
+            &asks_pda,
+            asks_rent,
+            OrderBook::MAX_LEN as u64,
+            program_id,
+        );
+        invoke_signed(
+            &create_asks_ix,
+            &[
+                authority_info.clone(),
+                asks_info.clone(),
+                system_program_info.clone(),
+            ],
+            &[&[b"asks", market_pda.as_ref(), &[asks_bump]]],
         )?;
     }
 
@@ -312,6 +374,8 @@ pub fn process_initialize_market(
         authority: *authority_info.key,
         base_mint: *base_mint_info.key,
         quote_mint: *quote_mint_info.key,
+        bids: *bids_info.key,
+        asks: *asks_info.key,
         fee_account: *fee_account_info.key,
         base_vault: *base_vault_info.key,
         quote_vault: *quote_vault_info.key,
@@ -321,7 +385,6 @@ pub fn process_initialize_market(
         min_order_size,
         tick_size,
         next_order_id: 1,
-        total_events: 0,
         last_price: 0,
         volume_24h: 0,
         fee_rate_bps: 30,
@@ -337,6 +400,20 @@ pub fn process_initialize_market(
     data[..serialized_data.len()].copy_from_slice(&serialized_data);
     msg!("MarketState serialized successfully");
 
+    let bids_book = OrderBook::new(market_pda, OrderSide::Buy);
+    let mut bids_data = bids_info.data.borrow_mut();
+    let mut serialized_bids = Vec::new();
+    bids_book.serialize(&mut serialized_bids)?;
+    bids_data[..serialized_bids.len()].copy_from_slice(&serialized_bids);
+    msg!("Bids account serialized successfully");
+
+    let asks_book = OrderBook::new(market_pda, OrderSide::Sell);
+    let mut asks_data = asks_info.data.borrow_mut();
+    let mut serialized_asks = Vec::new();
+    asks_book.serialize(&mut serialized_asks)?;
+    asks_data[..serialized_asks.len()].copy_from_slice(&serialized_asks);
+    msg!("Asks account serialized successfully");
+
     let market_events = MarketEvents::new(market_pda);
     let mut events_data = market_events_info.data.borrow_mut();
     let mut serialized_events = Vec::new();
@@ -345,6 +422,8 @@ pub fn process_initialize_market(
     msg!("MarketEvents serialized successfully");
 
     msg!("Market PDA: {}", market_pda);
+    msg!("Bids PDA: {}", bids_pda);
+    msg!("Asks PDA: {}", asks_pda);
     msg!("Events PDA: {}", market_events_pda);
     msg!("Authority: {}", authority_info.key);
     msg!("Base mint: {}", base_mint_info.key);
