@@ -23,6 +23,7 @@
         let account_info_iter = &mut accounts.iter();
 
         let authority_info = next_account_info(account_info_iter)?;
+        let consume_events_authority= next_account_info(account_info_iter)?; 
         let market_info = next_account_info(account_info_iter)?;
         let base_mint_info = next_account_info(account_info_iter)?;
         let quote_mint_info = next_account_info(account_info_iter)?;
@@ -373,6 +374,7 @@
 
         let market_state = MarketState {
             authority: *authority_info.key,
+            consume_events_authority: *consume_events_authority.key,
             base_mint: *base_mint_info.key,
             quote_mint: *quote_mint_info.key,
             bids: *bids_info.key,
@@ -393,23 +395,19 @@
             is_initialized: true,
         };
 
-        let mut data = market_info.data.borrow_mut();
-        market_state.serialize(&mut &mut data[..])?;
+        market_state.serialize(&mut *market_info.data.borrow_mut())?;
         msg!("MarketState serialized successfully");
 
         let bids_book = OrderBook::new(market_pda, Side::Buy);
-        let mut bids_data = bids_info.data.borrow_mut();
-        bids_book.serialize(&mut &mut bids_data[..])?;
+        bids_book.serialize(&mut *bids_info.data.borrow_mut())?;
         msg!("Bids account initialized successfully");
 
         let asks_book = OrderBook::new(market_pda, Side::Sell);
-        let mut asks_data = asks_info.data.borrow_mut();
-        asks_book.serialize(&mut &mut asks_data[..])?;
+        asks_book.serialize(&mut *asks_info.data.borrow_mut())?;
         msg!("Asks account initialized successfully");
 
         let market_events = MarketEvents::new(market_pda);
-        let mut events_data = market_events_info.data.borrow_mut();
-        market_events.serialize(&mut &mut events_data[..])?;
+        market_events.serialize(&mut *market_events_info.data.borrow_mut())?;
         msg!("MarketEvents account initialized");
 
         msg!("Market PDA: {}", market_pda);

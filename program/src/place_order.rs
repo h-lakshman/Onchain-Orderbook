@@ -4,16 +4,18 @@ use solana_program::{
     entrypoint::ProgramResult,
     msg,
     program_error::ProgramError,
+    program::invoke,
     pubkey::Pubkey,
     sysvar::{clock::Clock, Sysvar},
 };
+use spl_token::instruction as token_instruction;
 
 use crate::state::{
-    Event, EventType, MarketEvents, MarketState, Order, OrderBook, Side, UserBalance, MAX_ORDERS,
+    Event, EventType, MarketEvents, MarketState, Order, OrderBook, Side, UserBalance,
 };
 
 pub fn process_place_order(
-    _program_id: &Pubkey,
+    program_id: &Pubkey,
     accounts: &[AccountInfo],
     side: Side,
     price: u64,
@@ -24,9 +26,15 @@ pub fn process_place_order(
     let user_info = next_account_info(account_info_iter)?;
     let user_balance_info = next_account_info(account_info_iter)?;
     let market_info = next_account_info(account_info_iter)?;
+    let market_authority_info = next_account_info(account_info_iter)?;
     let bids_info = next_account_info(account_info_iter)?;
     let asks_info = next_account_info(account_info_iter)?;
     let market_events_info = next_account_info(account_info_iter)?;
+    let user_base_token_info = next_account_info(account_info_iter)?;
+    let user_quote_token_info = next_account_info(account_info_iter)?;
+    let market_base_vault_info = next_account_info(account_info_iter)?;
+    let market_quote_vault_info = next_account_info(account_info_iter)?;
+    let token_program_info = next_account_info(account_info_iter)?;
     let clock_sysvar_info = next_account_info(account_info_iter)?;
 
     if !user_info.is_signer {
@@ -40,6 +48,26 @@ pub fn process_place_order(
     let mut asks = OrderBook::try_from_slice(&asks_info.data.borrow())?;
     let mut market_events = MarketEvents::try_from_slice(&market_events_info.data.borrow())?;
     let clock = Clock::from_account_info(clock_sysvar_info)?;
+
+    if user_balance.owner != *user_info.key {
+        msg!("User balance account does not belong to signer");
+        return Err(ProgramError::InvalidAccountData);
+    }
+
+    if user_balance.market != *market_info.key {
+        msg!("User balance account does not belong to this market");
+        return Err(ProgramError::InvalidAccountData);
+    }
+
+    let (expected_market_authority, _) = Pubkey::find_program_address(
+        &[b"market", market_state.base_mint.as_ref(), market_state.quote_mint.as_ref()],
+        program_id,
+    );
+    
+    if *market_authority_info.key != expected_market_authority {
+        msg!("Invalid market authority");
+        return Err(ProgramError::InvalidAccountData);
+    }
 
     let (taker_book, maker_book) = if side == Side::Buy {
         (&mut bids, &mut asks)
@@ -57,21 +85,66 @@ pub fn process_place_order(
         return Err(ProgramError::InsufficientFunds);
     }
 
+    if side == Side::Buy {
+        msg!("Transferring {} quote tokens to market vault", required_quote);
+        
+        let transfer_quote_ix = token_instruction::transfer(
+            token_program_info.key,
+            user_quote_token_info.key,
+            market_quote_vault_info.key,
+            user_info.key,
+            &[],
+            required_quote,
+        )?;
+
+        invoke(
+            &transfer_quote_ix,
+            &[
+                user_quote_token_info.clone(),
+                market_quote_vault_info.clone(),
+                user_info.clone(),
+                token_program_info.clone(),
+            ],
+        )?;
+
+        msg!("Quote tokens transferred successfully");
+    } else {
+        msg!("Transferring {} base tokens to market vault", required_base);
+        
+        let transfer_base_ix = token_instruction::transfer(
+            token_program_info.key,
+            user_base_token_info.key,
+            market_base_vault_info.key,
+            user_info.key,
+            &[],
+            required_base,
+        )?;
+
+        invoke(
+            &transfer_base_ix,
+            &[
+                user_base_token_info.clone(),
+                market_base_vault_info.clone(),
+                user_info.clone(),
+                token_program_info.clone(),
+            ],
+        )?;
+
+        msg!("Base tokens transferred successfully");
+    }
+
     user_balance.available_base_balance -= required_base;
     user_balance.locked_base_balance += required_base;
     user_balance.available_quote_balance -= required_quote;
     user_balance.locked_quote_balance += required_quote;
 
     let mut remaining_quantity = quantity;
-
-    // Matching logic
-    for i in 0..MAX_ORDERS {
+    let mut orders_to_remove = Vec::new();
+    
+    for i in 0..maker_book.orders.len() {
         let maker_order = &mut maker_book.orders[i];
         if remaining_quantity == 0 {
             break;
-        }
-        if !maker_order.is_active {
-            continue;
         }
 
         let price_match = if side == Side::Buy {
@@ -91,60 +164,46 @@ pub fn process_place_order(
                 let maker_fill_event = Event {
                     event_type: EventType::Fill,
                     maker: maker_order.owner,
+                    taker: *user_info.key,
+                    maker_order_id: maker_order.order_id,
                     quantity: fill_quantity,
-                    order_id: maker_order.order_id,
                     price: maker_order.price,
                     timestamp: clock.unix_timestamp,
+                    side,
                 };
                 market_events.add_event(maker_fill_event)?;
 
-                if side == Side::Buy {
-                    user_balance.locked_quote_balance -= fill_quantity * maker_order.price;
-                    user_balance.available_base_balance += fill_quantity;
-                } else {
-                    user_balance.locked_base_balance -= fill_quantity;
-                    user_balance.available_quote_balance += fill_quantity * maker_order.price;
-                }
+                msg!("Filled {} quantity at {} price", fill_quantity, maker_order.price);
 
                 if maker_order.filled_quantity == maker_order.quantity {
-                    maker_order.is_active = false;
-                    maker_book.active_orders_count -= 1;
+                    orders_to_remove.push(i);
                 }
             }
         }
     }
 
+    for &index in orders_to_remove.iter().rev() {
+        maker_book.orders.remove(index);
+        maker_book.active_orders_count -= 1;
+    }
+
     if remaining_quantity > 0 {
-        if taker_book.active_orders_count >= MAX_ORDERS as u64 {
-            return Err(ProgramError::Custom(2)); // Order book is full
-        }
-
-        // Find the first inactive slot
-        let mut new_order_index: Option<usize> = None;
-        for i in 0..MAX_ORDERS {
-            if !taker_book.orders[i].is_active {
-                new_order_index = Some(i);
-                break;
-            }
-        }
-
-        if let Some(index) = new_order_index {
-            taker_book.orders[index] = Order {
-                order_id: market_state.next_order_id,
-                owner: *user_info.key,
-                market: *market_info.key,
-                side,
-                price,
-                quantity: remaining_quantity,
-                filled_quantity: 0,
-                timestamp: clock.unix_timestamp,
-                is_active: true,
-            };
-            taker_book.active_orders_count += 1;
-            market_state.next_order_id += 1;
-        } else {
-            return Err(ProgramError::Custom(2)); // Order book is full (no inactive slots found)
-        }
+        let new_order = Order {
+            order_id: market_state.next_order_id,
+            owner: *user_info.key,
+            market: *market_info.key,
+            side,
+            price,
+            quantity: remaining_quantity,
+            filled_quantity: 0,
+            timestamp: clock.unix_timestamp,
+        };
+        taker_book.add_order(new_order)?;
+        market_state.next_order_id += 1;
+        
+        msg!("Added remaining order: {} quantity at {} price", remaining_quantity, price);
+    } else {
+        msg!("Order fully filled, no remaining quantity");
     }
 
     user_balance.serialize(&mut *user_balance_info.data.borrow_mut())?;
@@ -153,5 +212,6 @@ pub fn process_place_order(
     market_events.serialize(&mut *market_events_info.data.borrow_mut())?;
     market_state.serialize(&mut *market_info.data.borrow_mut())?;
 
+    msg!("Order placement completed successfully");
     Ok(())
 }
