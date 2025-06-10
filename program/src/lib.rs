@@ -9,14 +9,15 @@ mod create_user_account;
 mod place_order;
 mod state;
 use initialize_market::process_initialize_market;
-use create_user_account::process_create_user_balance_account;
 use place_order::process_place_order;
 use state::Side;
+
+use crate::create_user_account::process_create_update_user_balance_account;
 
 #[derive(BorshSerialize, BorshDeserialize, Debug)]
 pub enum Instruction {
     InitializeMarket { min_order_size: u64, tick_size: u64 },
-    CreateUserBalanceAccount,
+    CreateUpdateUserBalanceAccount { onramp_quantity: u64 },
     PlaceOrder {
         side: Side,
         price: u64,
@@ -44,9 +45,9 @@ fn process_instruction(
             msg!("Instruction: Initialize Market");
             process_initialize_market(program_id, accounts, min_order_size, tick_size)
         }
-        Instruction::CreateUserBalanceAccount => {
+        Instruction::CreateUpdateUserBalanceAccount { onramp_quantity } => {
             msg!("Instruction: Create User Balance Account");
-            process_create_user_balance_account(program_id, accounts)
+            process_create_update_user_balance_account(program_id, accounts, onramp_quantity)
         }
         Instruction::PlaceOrder {
             side,
