@@ -1,5 +1,5 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use solana_program::pubkey::Pubkey;
+use solana_program::{entrypoint::ProgramResult, program_error::ProgramError, pubkey::Pubkey};
 
 #[derive(BorshDeserialize, BorshSerialize, Debug)]
 pub struct MarketState {
@@ -9,13 +9,14 @@ pub struct MarketState {
     pub fee_account: Pubkey,      
     pub base_vault: Pubkey,       
     pub quote_vault: Pubkey,      
-    pub market_events: Pubkey,    
+    pub market_events: Pubkey,
+    pub bids:Pubkey,
+    pub asks:Pubkey,   
     pub event_head: u64,          
     pub event_tail: u64,          
     pub min_order_size: u64,      
     pub tick_size: u64,           
     pub next_order_id: u64,       
-    pub total_events: u64,        
     pub last_price: u64,          
     pub volume_24h: u64,          
     pub fee_rate_bps: u16,        
@@ -24,8 +25,9 @@ pub struct MarketState {
 }
 
 impl MarketState {
-    pub const LEN: usize = 7 * 32 + 6 * 8 + 2 + 2 + 16; // 292 bytes,extra 16 bytes for borsh overhead
+    pub const LEN: usize = 9 * 32 + 7 * 8 + 2 + 1 + 1; // 348 bytes
 }
+
 #[derive(BorshDeserialize, BorshSerialize, Debug)]
 pub struct UserBalance {
     pub owner: Pubkey,
@@ -39,84 +41,48 @@ pub struct UserBalance {
 }
 
 impl UserBalance {
-    pub const LEN: usize = 32 + 32 + 8 + 8 + 8 + 8 + 8 + 8; // 112 bytes
-}
-pub const MAX_EVENTS: usize = 1000; //scale it accordingly
-
-#[derive(BorshDeserialize, BorshSerialize, Debug)]
-pub struct MarketEvents {
-    pub market: Pubkey,
-    pub events: Vec<Event>,  
-    pub head: u64,
-    pub tail: u64,
+    pub const LEN: usize = 2 * 32 + 6 * 8; // 112 bytes
 }
 
-impl MarketEvents {
-    pub fn calculate_size(num_events: usize) -> usize {
-        32 +           
-        4 +           
-        (Event::LEN * num_events) + 
-        8 +            
-        8              
-    }
-    
-    pub const MAX_LEN: usize = 32 + 4 + (Event::LEN * MAX_EVENTS) + 8 + 8; // ~97KB
-    
-    pub const MIN_LEN: usize = 32 + 4 + 8 + 8; // 52 bytes
-    
-    pub fn new(market: Pubkey) -> Self {
-        Self {
-            market,
-            events: Vec::new(),
-            head: 0,
-            tail: 0,
-        }
-    }
-    
-    pub fn add_event(&mut self, event: Event) -> Result<(), &'static str> {
-        if self.events.len() >= MAX_EVENTS {
-            return Err("Event queue is full");
-        }
-        self.events.push(event);
-        Ok(())
-    }
-    
-    pub fn is_full(&self) -> bool {
-        self.events.len() >= MAX_EVENTS
-    }
-    
-    pub fn len(&self) -> usize {
-        self.events.len()
-    }
-}
+pub const MAX_EVENTS: usize = 512;
 
 #[derive(BorshDeserialize, BorshSerialize, Debug, Clone, Copy)]
 pub struct Event {
     pub event_type: EventType,
-    pub order_id: u64,
     pub maker: Pubkey,
-    pub taker: Pubkey,
-    pub price: u64,
     pub quantity: u64,
+    pub order_id: u64,
+    pub price: u64,
     pub timestamp: i64,
 }
 
-impl Event {
-    pub const LEN: usize = 1 + 8 + 32 + 32 + 8 + 8 + 8; // 97 bytes
+impl Default for Event {
+    fn default() -> Self {
+        Self {
+            event_type: EventType::Fill,
+            maker: Pubkey::default(),
+            quantity: 0,
+            order_id: 0,
+            price: 0,
+            timestamp: 0,
+        }
+    }
 }
 
-#[derive(BorshDeserialize, BorshSerialize, Debug, Clone, Copy)]
+#[derive(BorshDeserialize, BorshSerialize, Debug, Clone, Copy, PartialEq)]
 pub enum EventType {
     Fill,  
     Out,   
 }
 
-#[derive(BorshDeserialize, BorshSerialize, Debug)]
+pub const MAX_ORDERS: usize = 1024; // Max possible orders
+
+#[derive(BorshDeserialize, BorshSerialize, Debug, Clone, Copy)]
 pub struct Order {
     pub order_id: u64,
     pub owner: Pubkey,
     pub market: Pubkey,
-    pub side: OrderSide,
+    pub side: Side,
     pub price: u64,
     pub quantity: u64,
     pub filled_quantity: u64,
@@ -124,12 +90,79 @@ pub struct Order {
     pub is_active: bool,
 }
 
-impl Order {
-    pub const LEN: usize = 8 + 32 + 32 + 1 + 8 + 8 + 8 + 8 + 1; // 106 bytes
+impl Default for Order {
+    fn default() -> Self {
+        Self {
+            order_id: 0,
+            owner: Pubkey::default(),
+            market: Pubkey::default(),
+            side: Side::Buy,
+            price: 0,
+            quantity: 0,
+            filled_quantity: 0,
+            timestamp: 0,
+            is_active: false,
+        }
+    }
 }
 
-#[derive(BorshDeserialize, BorshSerialize, Debug, Clone, PartialEq)]
-pub enum OrderSide {
+#[derive(BorshDeserialize, BorshSerialize, Debug, Clone, Copy, PartialEq)]
+pub enum Side {
     Buy,
     Sell,
+}
+
+#[derive(BorshDeserialize, BorshSerialize, Debug)]
+pub struct OrderBook {
+    pub market: Pubkey,
+    pub side: Side,
+    pub orders: [Order; MAX_ORDERS],
+    pub active_orders_count: u64,
+}
+
+impl OrderBook {
+    pub const LEN: usize = 32 + 1 + (106 * MAX_ORDERS) + 8; // ~10.2KB
+
+    pub fn new(market: Pubkey, side: Side) -> Self {
+        Self {
+            market,
+            side,
+            orders: [Order::default(); MAX_ORDERS],
+            active_orders_count: 0,
+        }
+    }
+}
+
+#[derive(BorshDeserialize, BorshSerialize, Debug)]
+pub struct MarketEvents {
+    pub market: Pubkey,
+    pub head: u64,
+    pub count: u64,
+    pub seq_num: u64,
+    pub events: [Event; MAX_EVENTS],
+}
+
+impl MarketEvents {
+    pub const LEN: usize = 32 + 8 + 8 + 8 + (65 * MAX_EVENTS); // ~33KB
+
+    pub fn new(market: Pubkey) -> Self {
+        Self {
+            market,
+            head: 0,
+            count: 0,
+            seq_num: 0,
+            events: [Event::default(); MAX_EVENTS],
+        }
+    }
+
+    pub fn add_event(&mut self, event: Event) -> ProgramResult {
+        if self.count >= MAX_EVENTS as u64 {
+            return Err(ProgramError::Custom(1)); // Event queue is full
+        }
+        let tail = (self.head + self.count) % (MAX_EVENTS as u64);
+        self.events[tail as usize] = event;
+        self.count += 1;
+        self.seq_num += 1;
+        Ok(())
+    }
 }

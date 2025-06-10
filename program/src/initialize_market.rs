@@ -12,7 +12,7 @@ use solana_program::{
 };
 use spl_token::instruction as token_instruction;
 
-use crate::state::{MarketEvents, MarketState, OrderBook, OrderSide, MAX_EVENTS};
+use crate::state::{MarketEvents, MarketState, OrderBook, Side, MAX_EVENTS};
 
 pub fn process_initialize_market(
     program_id: &Pubkey,
@@ -181,13 +181,13 @@ pub fn process_initialize_market(
     }
 
     if bids_info.lamports() == 0 {
-        msg!("Creating bids account with {} bytes", OrderBook::MAX_LEN);
-        let bids_rent = rent.minimum_balance(OrderBook::MAX_LEN);
+        msg!("Creating bids account with {} bytes", OrderBook::LEN);
+        let bids_rent = rent.minimum_balance(OrderBook::LEN);
         let create_bids_ix = system_instruction::create_account(
             authority_info.key,
             &bids_pda,
             bids_rent,
-            OrderBook::MAX_LEN as u64,
+            OrderBook::LEN as u64,
             program_id,
         );
         invoke_signed(
@@ -202,13 +202,13 @@ pub fn process_initialize_market(
     }
 
     if asks_info.lamports() == 0 {
-        msg!("Creating asks account with {} bytes", OrderBook::MAX_LEN);
-        let asks_rent = rent.minimum_balance(OrderBook::MAX_LEN);
+        msg!("Creating asks account with {} bytes", OrderBook::LEN);
+        let asks_rent = rent.minimum_balance(OrderBook::LEN);
         let create_asks_ix = system_instruction::create_account(
             authority_info.key,
             &asks_pda,
             asks_rent,
-            OrderBook::MAX_LEN as u64,
+            OrderBook::LEN as u64,
             program_id,
         );
         invoke_signed(
@@ -223,12 +223,13 @@ pub fn process_initialize_market(
     }
 
     if market_events_info.lamports() == 0 {
-        let events_rent = rent.minimum_balance(MarketEvents::MIN_LEN);
+        msg!("Creating MINIMAL event queue for testing. Client must pre-create for production.");
+        let events_rent = rent.minimum_balance(32 + 8 + 8 + 8); // market + head + count + seq_num
         let create_events_ix = system_instruction::create_account(
             authority_info.key,
             &market_events_pda,
             events_rent,
-            MarketEvents::MIN_LEN as u64,
+            MarketEvents::LEN as u64,
             program_id,
         );
 
@@ -394,32 +395,23 @@ pub fn process_initialize_market(
     msg!("MarketState struct created successfully");
 
     let mut data = market_info.data.borrow_mut();
-    let mut serialized_data = Vec::new();
-    market_state.serialize(&mut serialized_data)?;
-    
-    data[..serialized_data.len()].copy_from_slice(&serialized_data);
+    market_state.serialize(&mut &mut data[..])?;
     msg!("MarketState serialized successfully");
 
-    let bids_book = OrderBook::new(market_pda, OrderSide::Buy);
+    let bids_book = OrderBook::new(market_pda, Side::Buy);
     let mut bids_data = bids_info.data.borrow_mut();
-    let mut serialized_bids = Vec::new();
-    bids_book.serialize(&mut serialized_bids)?;
-    bids_data[..serialized_bids.len()].copy_from_slice(&serialized_bids);
+    bids_book.serialize(&mut &mut bids_data[..])?;
     msg!("Bids account serialized successfully");
 
-    let asks_book = OrderBook::new(market_pda, OrderSide::Sell);
+    let asks_book = OrderBook::new(market_pda, Side::Sell);
     let mut asks_data = asks_info.data.borrow_mut();
-    let mut serialized_asks = Vec::new();
-    asks_book.serialize(&mut serialized_asks)?;
-    asks_data[..serialized_asks.len()].copy_from_slice(&serialized_asks);
+    asks_book.serialize(&mut &mut asks_data[..])?;
     msg!("Asks account serialized successfully");
 
     let market_events = MarketEvents::new(market_pda);
     let mut events_data = market_events_info.data.borrow_mut();
-    let mut serialized_events = Vec::new();
-    market_events.serialize(&mut serialized_events)?;
-    events_data[..serialized_events.len()].copy_from_slice(&serialized_events);
-    msg!("MarketEvents serialized successfully");
+    market_events.serialize(&mut &mut events_data[..])?;
+    msg!("MarketEvents account initialized");
 
     msg!("Market PDA: {}", market_pda);
     msg!("Bids PDA: {}", bids_pda);
@@ -433,7 +425,6 @@ pub fn process_initialize_market(
     msg!("Fee account: {}", fee_account_pda);
     msg!("Base vault: {}", base_vault_pda);
     msg!("Quote vault: {}", quote_vault_pda);
-    msg!("Max events: {}", MAX_EVENTS);
 
     Ok(())
 } 
