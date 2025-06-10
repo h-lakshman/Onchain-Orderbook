@@ -46,7 +46,7 @@ pub fn process_create_update_user_balance_account(
         return Err(ProgramError::IncorrectProgramId);
     }
 
-    let new_user_account_seeds = &[b"balance", user_info.key.as_ref()];
+    let new_user_account_seeds = &[b"user_balance", user_info.key.as_ref(), market_info.key.as_ref()];
     let (new_user_account_pda, new_user_account_bump) = 
         Pubkey::find_program_address(new_user_account_seeds, program_id);
 
@@ -80,10 +80,9 @@ pub fn process_create_update_user_balance_account(
                 new_user_balance_info.clone(),
                 system_program_info.clone(),
             ],
-            &[&[b"balance", user_info.key.as_ref(), &[new_user_account_bump]]],
+            &[&[b"user_balance", user_info.key.as_ref(), market_info.key.as_ref(), &[new_user_account_bump]]],
         )?;
 
-        // init balance acount
         let user_balance_account_data = UserBalance {
             owner: *user_info.key,
             market: *market_info.key,
@@ -125,10 +124,9 @@ pub fn process_create_update_user_balance_account(
             ],
         )?;
 
-        // Update user balance to reflect the deposit
         let mut user_balance = UserBalance::try_from_slice(&new_user_balance_info.data.borrow())?;
         user_balance.available_quote_balance += onramp_quantity;
-        user_balance.serialize(&mut &mut new_user_balance_info.data.borrow_mut()[..])?;
+        user_balance.serialize(&mut *new_user_balance_info.data.borrow_mut())?;
 
         msg!("Successfully deposited {} tokens to user balance", onramp_quantity);
         msg!("New available quote balance: {}", user_balance.available_quote_balance);
