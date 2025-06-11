@@ -1,18 +1,6 @@
-# 🚀 On-Chain Orderbook - Solana Native Implementation
+# On-Chain Orderbook - Solana Native Implementation
 
 A production-ready, native Rust Solana orderbook implementing deferred settlement architecture with comprehensive security features.
-
-## 📋 Table of Contents
-
-- [Overview](#overview)
-- [Architecture](#architecture)
-- [Key Features](#key-features)
-- [3-Phase Settlement Flow](#3-phase-settlement-flow)
-- [Security Features](#security-features)
-- [Instructions](#instructions)
-- [Account Structure](#account-structure)
-- [Getting Started](#getting-started)
-- [Project Structure](#project-structure)
 
 ## 🎯 Overview
 
@@ -50,7 +38,7 @@ The orderbook follows a **3-phase deferred settlement model**:
 - Transfers: Market vaults → User token accounts
 - Resets `pending_balance` to zero
 
-## ✨ Key Features
+## Key Features
 
 ### 🔒 **Security First**
 
@@ -124,46 +112,7 @@ signer == market_state.consume_events_authority
 | `ConsumeEvents`      | Process settlement events                        | Crank Authority    |
 | `SettleBalance`      | Withdraw settled tokens                          | User               |
 
-### Example Usage
-
-```typescript
-// 1. Deposit tokens
-await program.methods
-  .depositQuoteTokens(new BN(1000))
-  .accounts({
-    user: userKeypair.publicKey,
-    userQuoteTokenAccount: userUsdcAccount,
-    // ... other accounts
-  })
-  .rpc();
-
-// 2. Place order
-await program.methods
-  .placeOrder({ buy: {} }, new BN(100), new BN(10))
-  .accounts({
-    user: userKeypair.publicKey,
-    // ... other accounts
-  })
-  .rpc();
-
-// 3. Authority processes events
-await program.methods
-  .consumeEvents()
-  .accounts({
-    consumeEventsAuthority: crankKeypair.publicKey,
-    // ... other accounts
-  })
-  .rpc();
-
-// 4. User withdraws tokens
-await program.methods
-  .settleBalance()
-  .accounts({
-    user: userKeypair.publicKey,
-    // ... other accounts
-  })
-  .rpc();
-```
+### Example Usage :- Check Client directory for example usage
 
 ## 🏛️ Account Structure
 
@@ -211,18 +160,14 @@ Vaults: ["base_vault", market_key] / ["quote_vault", market_key]
 
 ### Build & Test
 
-```bash
+````bash
 # Clone repository
 git clone <repository-url>
 cd Onchain-Orderbook
 
 # Build program
 cd program
-cargo build-bpf
-
-# Run tests (if available)
-cargo test
-```
+cargo build-sbf
 
 ### Deploy
 
@@ -233,7 +178,7 @@ solana program deploy target/deploy/program.so --url devnet
 # Or deploy to localnet for testing
 solana-test-validator
 solana program deploy target/deploy/program.so --url localhost
-```
+````
 
 ## 📁 Project Structure
 
