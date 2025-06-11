@@ -22,6 +22,7 @@ let testEnv: {
   svm: LiteSVM;
   programId: Keypair;
   authority: Keypair;
+  consumerEventsAuthority: Keypair;
   user: Keypair;
   baseAsset: PublicKey;
   quoteAsset: PublicKey;
@@ -44,7 +45,12 @@ beforeAll(async () => {
   svm.addProgramFromFile(programId.publicKey, process.env.program_path || "");
 
   const authority = Keypair.generate();
+  const consumerEventsAuthority = Keypair.generate();
   svm.airdrop(authority.publicKey, BigInt(100 * LAMPORTS_PER_SOL));
+  svm.airdrop(
+    consumerEventsAuthority.publicKey,
+    BigInt(100 * LAMPORTS_PER_SOL)
+  );
 
   const user = Keypair.generate();
   svm.airdrop(user.publicKey, BigInt(100 * LAMPORTS_PER_SOL));
@@ -203,7 +209,11 @@ beforeAll(async () => {
   );
 
   const [userBalancePda] = PublicKey.findProgramAddressSync(
-    [Buffer.from("balance"), user.publicKey.toBuffer()],
+    [
+      Buffer.from("user_balance"),
+      user.publicKey.toBuffer(),
+      marketAccountPda.toBuffer(),
+    ],
     programId.publicKey
   );
 
@@ -211,6 +221,7 @@ beforeAll(async () => {
     svm,
     programId,
     authority,
+    consumerEventsAuthority,
     user,
     baseAsset,
     quoteAsset,
@@ -245,6 +256,7 @@ test("Initialize Market", async () => {
     baseVaultPda,
     quoteVaultPda,
     feeAccountPda,
+    consumerEventsAuthority,
   } = testEnv;
 
   const minOrderSize = new BN(1_000_000);
@@ -265,6 +277,11 @@ test("Initialize Market", async () => {
     programId: programId.publicKey,
     keys: [
       { pubkey: authority.publicKey, isSigner: true, isWritable: true },
+      {
+        pubkey: consumerEventsAuthority.publicKey,
+        isSigner: false,
+        isWritable: false,
+      },
       { pubkey: marketAccountPda, isSigner: false, isWritable: true },
       { pubkey: baseAsset, isSigner: false, isWritable: false },
       { pubkey: quoteAsset, isSigner: false, isWritable: false },
@@ -315,17 +332,18 @@ test("Initialize Market", async () => {
 
   const accountData = Buffer.from(marketAccount!.data);
   const marketState = MarketStateSchema.decode(accountData);
+
   expect(marketState.authority.equals(authority.publicKey)).toBeTrue();
-  expect(marketState.baseMint.equals(baseAsset)).toBeTrue();
-  expect(marketState.quoteMint.equals(quoteAsset)).toBeTrue();
-  expect(marketState.minOrderSize.eq(minOrderSize)).toBeTrue();
-  expect(marketState.tickSize.eq(tickSize)).toBeTrue();
-  expect(marketState.isInitialized).toBeTrue();
+  expect(marketState.base_mint.equals(baseAsset)).toBeTrue();
+  expect(marketState.quote_mint.equals(quoteAsset)).toBeTrue();
+  expect(marketState.min_order_size.eq(minOrderSize)).toBeTrue();
+  expect(marketState.tick_size.eq(tickSize)).toBeTrue();
+  expect(marketState.is_initialized).toBeTrue();
 
   console.log(" Market initialized successfully!");
 });
 
-test("Create User Balance Account", async () => {
+test("Create User Quote Balance Account and Deposit Funds", async () => {
   const {
     svm,
     programId,
@@ -342,8 +360,8 @@ test("Create User Balance Account", async () => {
   const userBalanceDataBuffer = Buffer.alloc(9);
   InstructionSchema.encode(
     {
-      CreateUserBalanceAccount: {
-        onramp_quantity: depositAmount,
+      DepositQuoteTokens: {
+        quantity: depositAmount,
       },
     },
     userBalanceDataBuffer
@@ -402,7 +420,15 @@ test("Create User Balance Account", async () => {
   const accountData = Buffer.from(userBalanceAccount!.data);
   const userBalanceData = UserBalance.decode(accountData);
 
-  // Check that the user balance
+  console.log(
+    "DEBUG - Expected quote balance:",
+    new BN(100_000_000).toString()
+  );
+  console.log(
+    "DEBUG - Actual quote balance:",
+    userBalanceData.available_quote_balance.toString()
+  );
+
   expect(
     userBalanceData.available_quote_balance.eq(new BN(100_000_000))
   ).toBeTrue();
@@ -413,5 +439,95 @@ test("Create User Balance Account", async () => {
     `   Available USDC: ${
       userBalanceData.available_quote_balance / 1_000_000
     } USDC`
+  );
+});
+
+test("Create User Base Balance Account and Deposit Funds", async () => {
+  const {
+    svm,
+    programId,
+    user,
+    marketAccountPda,
+    baseVaultPda,
+    userBalancePda,
+    userBaseTokenAccount,
+  } = testEnv;
+
+  // testy by depositing 100 sol
+  const depositAmount = new BN(100_000_000);
+
+  const userBalanceDataBuffer = Buffer.alloc(9);
+  InstructionSchema.encode(
+    {
+      DepositBaseTokens: {
+        quantity: depositAmount,
+      },
+    },
+    userBalanceDataBuffer
+  );
+
+  const createUserBalanceIx = new TransactionInstruction({
+    programId: programId.publicKey,
+    data: userBalanceDataBuffer,
+    keys: [
+      { pubkey: user.publicKey, isSigner: true, isWritable: true },
+      { pubkey: userBalancePda, isSigner: false, isWritable: true },
+      { pubkey: marketAccountPda, isSigner: false, isWritable: false },
+      { pubkey: userBaseTokenAccount, isSigner: false, isWritable: true },
+      { pubkey: baseVaultPda, isSigner: false, isWritable: true },
+      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      {
+        pubkey: new PublicKey("SysvarRent111111111111111111111111111111111"),
+        isSigner: false,
+        isWritable: false,
+      },
+    ],
+  });
+
+  const userBalanceTx = new Transaction().add(createUserBalanceIx);
+  userBalanceTx.feePayer = user.publicKey;
+  userBalanceTx.recentBlockhash = await svm.latestBlockhash();
+  userBalanceTx.sign(user);
+
+  const userBalanceResult = await svm.sendTransaction(userBalanceTx);
+
+  if (
+    userBalanceResult &&
+    typeof userBalanceResult === "object" &&
+    "err" in userBalanceResult
+  ) {
+    console.error("User balance creation failed:", userBalanceResult);
+    if (userBalanceResult.meta && userBalanceResult.meta().logs) {
+      console.log("Program logs:");
+      userBalanceResult
+        .meta()
+        .logs()
+        .forEach((log: string, index: number) => {
+          console.log(`${index + 1}: ${log}`);
+        });
+    }
+    throw new Error("User balance creation failed");
+  }
+
+  console.log("User deposited 100 SOL and created balance account!");
+
+  const userBalanceAccount = svm.getAccount(userBalancePda);
+  expect(userBalanceAccount).toBeDefined();
+  expect(userBalanceAccount!.data.length).toBeGreaterThan(0);
+
+  const accountData = Buffer.from(userBalanceAccount!.data);
+  const userBalanceData = UserBalance.decode(accountData);
+
+  expect(
+    userBalanceData.available_base_balance.eq(new BN(100_000_000))
+  ).toBeTrue();
+  expect(userBalanceData.owner.equals(user.publicKey)).toBeTrue();
+  expect(userBalanceData.market.equals(marketAccountPda)).toBeTrue();
+
+  console.log(
+    `   Available SOL: ${
+      userBalanceData.available_base_balance / 1_000_000_000
+    } SOL`
   );
 });

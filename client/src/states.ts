@@ -10,35 +10,39 @@ import {
 
 export const MarketStateSchema = struct([
   publicKey("authority"),
-  publicKey("baseMint"),
-  publicKey("quoteMint"),
-  publicKey("feeAccount"),
-  publicKey("baseVault"),
-  publicKey("quoteVault"),
-  publicKey("marketEvents"),
+  publicKey("consume_events_authority"),
+  publicKey("base_mint"),
+  publicKey("quote_mint"),
+  publicKey("fee_account"),
+  publicKey("base_vault"),
+  publicKey("quote_vault"),
+  publicKey("market_events"),
   publicKey("bids"),
   publicKey("asks"),
-  u64("eventHead"),
-  u64("eventTail"),
-  u64("minOrderSize"),
-  u64("tickSize"),
-  u64("nextOrderId"),
-  u64("lastPrice"),
-  u64("volume24h"),
-  u16("feeRateBps"),
+  u64("event_head"),
+  u64("event_tail"),
+  u64("min_order_size"),
+  u64("tick_size"),
+  u64("next_order_id"),
+  u64("last_price"),
+  u64("volume_24h"),
+  u16("fee_rate_bps"),
   u8("bump"),
-  bool("isInitialized"),
+  bool("is_initialized"),
 ]);
 
 const OrderSideSchema = rustEnum([struct([], "Buy"), struct([], "Sell")]);
 
 export const InstructionSchema = rustEnum([
   struct([u64("min_order_size"), u64("tick_size")], "InitializeMarket"),
-  struct([u64("onramp_quantity")], "CreateUserBalanceAccount"),
+  struct([u64("quantity")], "DepositQuoteTokens"),
+  struct([u64("quantity")], "DepositBaseTokens"),
   struct(
     [OrderSideSchema.replicate("side"), u64("price"), u64("quantity")],
     "PlaceOrder"
   ),
+  struct([], "ConsumeEvents"),
+  struct([], "SettleBalance"),
 ]);
 
 export const UserBalance = struct([
