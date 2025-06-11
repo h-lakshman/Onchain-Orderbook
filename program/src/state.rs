@@ -3,30 +3,30 @@ use solana_program::{entrypoint::ProgramResult, program_error::ProgramError, pub
 
 #[derive(BorshDeserialize, BorshSerialize, Debug)]
 pub struct MarketState {
-    pub authority: Pubkey,        
-    pub consume_events_authority: Pubkey,  
-    pub base_mint: Pubkey,        
-    pub quote_mint: Pubkey,       
-    pub fee_account: Pubkey,      
-    pub base_vault: Pubkey,       
-    pub quote_vault: Pubkey,      
+    pub authority: Pubkey,
+    pub consume_events_authority: Pubkey,
+    pub base_mint: Pubkey,
+    pub quote_mint: Pubkey,
+    pub fee_account: Pubkey,
+    pub base_vault: Pubkey,
+    pub quote_vault: Pubkey,
     pub market_events: Pubkey,
-    pub bids:Pubkey,
-    pub asks:Pubkey,   
-    pub event_head: u64,          
-    pub event_tail: u64,          
-    pub min_order_size: u64,      
-    pub tick_size: u64,           
-    pub next_order_id: u64,       
-    pub last_price: u64,          
-    pub volume_24h: u64,          
-    pub fee_rate_bps: u16,        
-    pub bump: u8,                 
-    pub is_initialized: bool,     
+    pub bids: Pubkey,
+    pub asks: Pubkey,
+    pub event_head: u64,
+    pub event_tail: u64,
+    pub min_order_size: u64,
+    pub tick_size: u64,
+    pub next_order_id: u64,
+    pub last_price: u64,
+    pub volume_24h: u64,
+    pub fee_rate_bps: u16,
+    pub bump: u8,
+    pub is_initialized: bool,
 }
 
 impl MarketState {
-    pub const LEN: usize = 10 * 32 + 7 * 8 + 2 + 1 + 1; //380 bytes 
+    pub const LEN: usize = 10 * 32 + 7 * 8 + 2 + 1 + 1; //380 bytes
 }
 
 #[derive(BorshDeserialize, BorshSerialize, Debug)]
@@ -56,7 +56,7 @@ pub struct Event {
     pub quantity: u64,
     pub price: u64,
     pub timestamp: i64,
-    pub side: Side, 
+    pub side: Side,
 }
 
 impl Default for Event {
@@ -76,8 +76,8 @@ impl Default for Event {
 
 #[derive(BorshDeserialize, BorshSerialize, Debug, Clone, Copy, PartialEq)]
 pub enum EventType {
-    Fill,  
-    Out,   
+    Fill,
+    Out,
 }
 
 pub const MAX_ORDERS: usize = 64;
@@ -124,7 +124,7 @@ pub struct OrderBook {
 }
 
 impl OrderBook {
-    pub const LEN: usize = 32 + 1 + 4 + (105 * MAX_ORDERS) + 8; // ~6.7KB 
+    pub const LEN: usize = 32 + 1 + 4 + (105 * MAX_ORDERS) + 8; // ~6.7KB
 
     pub fn new(market: Pubkey, side: Side) -> Self {
         Self {
@@ -151,12 +151,12 @@ pub struct MarketEvents {
     pub head: u64,
     pub count: u64,
     pub seq_num: u64,
-    pub events_to_process: u64,  
+    pub events_to_process: u64,
     pub events: Vec<Event>,
 }
 
 impl MarketEvents {
-    pub const LEN: usize = 32 + 8 + 8 + 8 + 8 + 4 + (98 * MAX_EVENTS); // ~9.8KB (added events_to_process) 
+    pub const LEN: usize = 32 + 8 + 8 + 8 + 8 + 4 + (98 * MAX_EVENTS); // ~9.8KB (added events_to_process)
 
     pub fn new(market: Pubkey) -> Self {
         Self {
@@ -173,12 +173,12 @@ impl MarketEvents {
         if self.events.len() >= MAX_EVENTS {
             return Err(ProgramError::Custom(1)); // Event queue is full
         }
-        
+
         // todo:- circular buffer logic
         self.events.push(event);
         self.count += 1;
         self.seq_num += 1;
-        self.events_to_process += 1;  
+        self.events_to_process += 1;
         Ok(())
     }
 }

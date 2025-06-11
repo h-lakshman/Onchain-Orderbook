@@ -4,27 +4,28 @@ use solana_program::{
     program_error::ProgramError, pubkey::Pubkey,
 };
 
-mod initialize_market;
-mod create_user_account;
-mod place_order;
-mod consume_events;
-mod settle_balance;
-mod state;
-use initialize_market::process_initialize_market;
-use place_order::process_place_order;
-use consume_events::process_consume_events;
-use settle_balance::process_settle_balance;
-use state::Side;
+mod instructions;
 
-use crate::create_user_account::process_create_update_user_balance_account;
+mod state;
+use instructions::{
+    process_consume_events, process_create_acc_and_deposit_base_tokens,
+    process_create_acc_and_deposit_quote_tokens, process_initialize_market, process_place_order,
+    process_settle_balance,
+};
+use state::Side;
 
 #[derive(BorshSerialize, BorshDeserialize, Debug)]
 pub enum Instruction {
-    InitializeMarket { 
-        min_order_size: u64, 
-        tick_size: u64 
+    InitializeMarket {
+        min_order_size: u64,
+        tick_size: u64,
     },
-    CreateUpdateUserBalanceAccount { onramp_quantity: u64 },
+    DepositQuoteTokens {
+        quantity: u64,
+    },
+    DepositBaseTokens {
+        quantity: u64,
+    },
     PlaceOrder {
         side: Side,
         price: u64,
@@ -54,9 +55,14 @@ fn process_instruction(
             msg!("Instruction: Initialize Market");
             process_initialize_market(program_id, accounts, min_order_size, tick_size)
         }
-        Instruction::CreateUpdateUserBalanceAccount { onramp_quantity } => {
-            msg!("Instruction: Create User Balance Account");
-            process_create_update_user_balance_account(program_id, accounts, onramp_quantity)
+
+        Instruction::DepositQuoteTokens { quantity } => {
+            msg!("Instruction: Deposit Quote Tokens");
+            process_create_acc_and_deposit_quote_tokens(program_id, accounts, quantity)
+        }
+        Instruction::DepositBaseTokens { quantity } => {
+            msg!("Instruction: Deposit Base Tokens");
+            process_create_acc_and_deposit_base_tokens(program_id, accounts, quantity)
         }
         Instruction::PlaceOrder {
             side,

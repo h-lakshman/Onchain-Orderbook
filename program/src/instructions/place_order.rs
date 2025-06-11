@@ -3,8 +3,8 @@ use solana_program::{
     account_info::{next_account_info, AccountInfo},
     entrypoint::ProgramResult,
     msg,
-    program_error::ProgramError,
     program::invoke,
+    program_error::ProgramError,
     pubkey::Pubkey,
     sysvar::{clock::Clock, Sysvar},
 };
@@ -60,10 +60,14 @@ pub fn process_place_order(
     }
 
     let (expected_market_authority, _) = Pubkey::find_program_address(
-        &[b"market", market_state.base_mint.as_ref(), market_state.quote_mint.as_ref()],
+        &[
+            b"market",
+            market_state.base_mint.as_ref(),
+            market_state.quote_mint.as_ref(),
+        ],
         program_id,
     );
-    
+
     if *market_authority_info.key != expected_market_authority {
         msg!("Invalid market authority");
         return Err(ProgramError::InvalidAccountData);
@@ -76,7 +80,11 @@ pub fn process_place_order(
     };
 
     let required_base = if side == Side::Sell { quantity } else { 0 };
-    let required_quote = if side == Side::Buy { quantity * price } else { 0 };
+    let required_quote = if side == Side::Buy {
+        quantity * price
+    } else {
+        0
+    };
 
     if user_balance.available_base_balance < required_base
         || user_balance.available_quote_balance < required_quote
@@ -86,8 +94,11 @@ pub fn process_place_order(
     }
 
     if side == Side::Buy {
-        msg!("Transferring {} quote tokens to market vault", required_quote);
-        
+        msg!(
+            "Transferring {} quote tokens to market vault",
+            required_quote
+        );
+
         let transfer_quote_ix = token_instruction::transfer(
             token_program_info.key,
             user_quote_token_info.key,
@@ -110,7 +121,7 @@ pub fn process_place_order(
         msg!("Quote tokens transferred successfully");
     } else {
         msg!("Transferring {} base tokens to market vault", required_base);
-        
+
         let transfer_base_ix = token_instruction::transfer(
             token_program_info.key,
             user_base_token_info.key,
@@ -140,7 +151,7 @@ pub fn process_place_order(
 
     let mut remaining_quantity = quantity;
     let mut orders_to_remove = Vec::new();
-    
+
     for i in 0..maker_book.orders.len() {
         let maker_order = &mut maker_book.orders[i];
         if remaining_quantity == 0 {
@@ -154,8 +165,10 @@ pub fn process_place_order(
         };
 
         if price_match {
-            let fill_quantity =
-                std::cmp::min(remaining_quantity, maker_order.quantity - maker_order.filled_quantity);
+            let fill_quantity = std::cmp::min(
+                remaining_quantity,
+                maker_order.quantity - maker_order.filled_quantity,
+            );
 
             if fill_quantity > 0 {
                 maker_order.filled_quantity += fill_quantity;
@@ -173,7 +186,11 @@ pub fn process_place_order(
                 };
                 market_events.add_event(maker_fill_event)?;
 
-                msg!("Filled {} quantity at {} price", fill_quantity, maker_order.price);
+                msg!(
+                    "Filled {} quantity at {} price",
+                    fill_quantity,
+                    maker_order.price
+                );
 
                 if maker_order.filled_quantity == maker_order.quantity {
                     orders_to_remove.push(i);
@@ -200,8 +217,12 @@ pub fn process_place_order(
         };
         taker_book.add_order(new_order)?;
         market_state.next_order_id += 1;
-        
-        msg!("Added remaining order: {} quantity at {} price", remaining_quantity, price);
+
+        msg!(
+            "Added remaining order: {} quantity at {} price",
+            remaining_quantity,
+            price
+        );
     } else {
         msg!("Order fully filled, no remaining quantity");
     }
