@@ -24,7 +24,30 @@ pub fn process_consume_events(program_id: &Pubkey, accounts: &[AccountInfo]) -> 
     }
 
     let market_state = MarketState::try_from_slice(&market_info.data.borrow())?;
-    let mut market_events = MarketEvents::try_from_slice(&market_events_info.data.borrow())?;
+    
+    // manual deserialization
+    let events_data = market_events_info.data.borrow();
+    
+    // MarketEvents: market(32) + head(8) + count(8) + seq_num(8) + events_to_process(8) + vec_len(4) + events
+    let min_size = 32 + 8 + 8 + 8 + 8 + 4; // 68 bytes for empty MarketEvents
+    let mut market_events = if events_data.len() >= min_size {
+        let events_len = u32::from_le_bytes([
+            events_data[64], events_data[65], events_data[66], events_data[67]
+        ]);
+        msg!("Events vector length: {}", events_len);
+        
+        // Each event is 98 bytes
+        let actual_size = min_size + (events_len as usize * 98);
+        msg!("Market events calculated actual data size: {}", actual_size);
+        
+        let actual_data = &events_data[0..actual_size];
+        let events = MarketEvents::try_from_slice(actual_data)?;
+        msg!("Market events deserialized successfully");
+        events
+    } else {
+        return Err(ProgramError::InvalidAccountData);
+    };
+    drop(events_data);
 
     if market_state.consume_events_authority != *consume_events_authority_info.key {
         msg!("Invalid consume events authority");
