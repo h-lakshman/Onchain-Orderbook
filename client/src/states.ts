@@ -6,6 +6,8 @@ import {
   publicKey,
   bool,
   rustEnum,
+  vec,
+  i64,
 } from "@coral-xyz/borsh";
 
 export const MarketStateSchema = struct([
@@ -31,21 +33,21 @@ export const MarketStateSchema = struct([
   bool("is_initialized"),
 ]);
 
-const OrderSideSchema = rustEnum([struct([], "Buy"), struct([], "Sell")]);
+export const OrderSideSchema = rustEnum([
+  struct([], "Buy"),
+  struct([], "Sell"),
+]);
 
 export const InstructionSchema = rustEnum([
   struct([u64("min_order_size"), u64("tick_size")], "InitializeMarket"),
   struct([u64("quantity")], "DepositQuoteTokens"),
   struct([u64("quantity")], "DepositBaseTokens"),
-  struct(
-    [OrderSideSchema.replicate("side"), u64("price"), u64("quantity")],
-    "PlaceOrder"
-  ),
+  struct([u8("side"), u64("price"), u64("quantity")], "PlaceOrder"),
   struct([], "ConsumeEvents"),
   struct([], "SettleBalance"),
 ]);
 
-export const UserBalance = struct([
+export const UserBalanceSchema = struct([
   publicKey("owner"),
   publicKey("market"),
   u64("available_base_balance"),
@@ -54,4 +56,22 @@ export const UserBalance = struct([
   u64("locked_quote_balance"),
   u64("pending_base_balance"),
   u64("pending_quote_balance"),
+]);
+
+export const OrderSchema = struct([
+  u64("order_id"),
+  publicKey("owner"),
+  publicKey("market"),
+  u8("side"),
+  u64("price"),
+  u64("quantity"),
+  u64("filled_quantity"),
+  i64("timestamp"),
+]);
+
+export const OrderbookSchema = struct([
+  publicKey("market"),
+  u8("side"),
+  vec(OrderSchema, "orders"),
+  u64("active_orders_count"),
 ]);
