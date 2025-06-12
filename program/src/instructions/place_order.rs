@@ -26,7 +26,6 @@ pub fn process_place_order(
     let user_info = next_account_info(account_info_iter)?;
     let user_balance_info = next_account_info(account_info_iter)?;
     let market_info = next_account_info(account_info_iter)?;
-    let market_authority_info = next_account_info(account_info_iter)?;
     let bids_info = next_account_info(account_info_iter)?;
     let asks_info = next_account_info(account_info_iter)?;
     let market_events_info = next_account_info(account_info_iter)?;
@@ -37,9 +36,26 @@ pub fn process_place_order(
     let token_program_info = next_account_info(account_info_iter)?;
     let clock_sysvar_info = next_account_info(account_info_iter)?;
 
+    if !spl_token::check_id(token_program_info.key) {
+        msg!("Invalid token program");
+        return Err(ProgramError::IncorrectProgramId);
+    }
+
     if !user_info.is_signer {
         msg!("User must be a signer");
         return Err(ProgramError::MissingRequiredSignature);
+    }
+    let user_account_seeds = &[
+        b"user_balance",
+        user_info.key.as_ref(),
+        market_info.key.as_ref(),
+    ];
+    let (user_balance_pda, _user_balance_bump) =
+        Pubkey::find_program_address(user_account_seeds, program_id);
+
+    if user_balance_pda != *user_balance_info.key {
+        msg!("Invalid user account. Expected PDA: {}", user_balance_pda);
+        return Err(ProgramError::InvalidAccountData);
     }
 
     let mut market_state = MarketState::try_from_slice(&market_info.data.borrow())?;
@@ -59,7 +75,41 @@ pub fn process_place_order(
         return Err(ProgramError::InvalidAccountData);
     }
 
-    let (expected_market_authority, _) = Pubkey::find_program_address(
+    let user_quote_token_data = &user_quote_token_info.data.borrow();
+    if user_quote_token_data.len() < 32 {
+        msg!("Invalid user quote token account data");
+        return Err(ProgramError::InvalidAccountData);
+    }
+    let mut mint_bytes = [0u8; 32];
+    mint_bytes.copy_from_slice(&user_quote_token_data[0..32]);
+    let user_token_mint = Pubkey::new_from_array(mint_bytes);
+    if user_token_mint != market_state.quote_mint {
+        msg!(
+            "User quote token account mint mismatch. Expected: {}, Got: {}",
+            market_state.quote_mint,
+            user_token_mint
+        );
+        return Err(ProgramError::InvalidAccountData);
+    }
+
+    let user_base_token_data = &user_base_token_info.data.borrow();
+    if user_base_token_data.len() < 32 {
+        msg!("Invalid user base token account data");
+        return Err(ProgramError::InvalidAccountData);
+    }
+    let mut mint_bytes = [0u8; 32];
+    mint_bytes.copy_from_slice(&user_base_token_data[0..32]);
+    let user_token_mint = Pubkey::new_from_array(mint_bytes);
+    if user_token_mint != market_state.base_mint {
+        msg!(
+            "User base token account mint mismatch. Expected: {}, Got: {}",
+            market_state.base_mint,
+            user_token_mint
+        );
+        return Err(ProgramError::InvalidAccountData);
+    }
+
+    let (market_pda, _) = Pubkey::find_program_address(
         &[
             b"market",
             market_state.base_mint.as_ref(),
@@ -68,8 +118,60 @@ pub fn process_place_order(
         program_id,
     );
 
-    if *market_authority_info.key != expected_market_authority {
-        msg!("Invalid market authority");
+    if *market_info.key != market_pda {
+        msg!("Invalid market account");
+        return Err(ProgramError::InvalidAccountData);
+    }
+
+    let bids_seeds = &[b"bids", market_pda.as_ref()];
+    let (bids_pda, _bids_bump) = Pubkey::find_program_address(bids_seeds, program_id);
+
+    if bids_info.key != &bids_pda {
+        msg!("Invalid bids account. Expected PDA: {}", bids_pda);
+        return Err(ProgramError::InvalidAccountData);
+    }
+
+    let asks_seeds = &[b"asks", market_pda.as_ref()];
+    let (asks_pda, _asks_bump) = Pubkey::find_program_address(asks_seeds, program_id);
+
+    if asks_info.key != &asks_pda {
+        msg!("Invalid asks account. Expected PDA: {}", asks_pda);
+        return Err(ProgramError::InvalidAccountData);
+    }
+
+    let market_events_seeds = &[b"events", market_pda.as_ref()];
+    let (market_events_pda, _events_bump) =
+        Pubkey::find_program_address(market_events_seeds, program_id);
+
+    if market_events_info.key != &market_events_pda {
+        msg!(
+            "Invalid market events account. Expected PDA: {}",
+            market_events_pda
+        );
+        return Err(ProgramError::InvalidAccountData);
+    }
+
+    let base_vault_seeds = &[b"base_vault", market_pda.as_ref()];
+    let (base_vault_pda, _base_vault_bump) =
+        Pubkey::find_program_address(base_vault_seeds, program_id);
+
+    if market_state.base_vault != base_vault_pda {
+        msg!(
+            "Invalid base vault account. Expected PDA: {}",
+            base_vault_pda
+        );
+        return Err(ProgramError::InvalidAccountData);
+    }
+
+    let quote_vault_seeds = &[b"quote_vault", market_pda.as_ref()];
+    let (quote_vault_pda, _quote_vault_bump) =
+        Pubkey::find_program_address(quote_vault_seeds, program_id);
+
+    if market_state.quote_vault != quote_vault_pda {
+        msg!(
+            "Invalid quote vault account. Expected PDA: {}",
+            quote_vault_pda
+        );
         return Err(ProgramError::InvalidAccountData);
     }
 

@@ -170,12 +170,18 @@ pub fn process_create_acc_and_deposit_quote_tokens(
             msg!("Updating existing account");
             let mut balance_data = new_user_balance_info.data.borrow_mut();
             let mut user_balance = UserBalance::try_from_slice(&balance_data)?;
-            msg!("Current quote balance: {}", user_balance.available_quote_balance);
+            msg!(
+                "Current quote balance: {}",
+                user_balance.available_quote_balance
+            );
             user_balance.available_quote_balance += quantity;
             user_balance.serialize(&mut *balance_data)?;
-            msg!("Updated existing account, new quote balance: {}", user_balance.available_quote_balance);
+            msg!(
+                "Updated existing account, new quote balance: {}",
+                user_balance.available_quote_balance
+            );
         }
-        
+
         msg!("Successfully deposited {} tokens to user balance", quantity);
     }
 
@@ -216,7 +222,7 @@ pub fn process_create_acc_and_deposit_base_tokens(
     let market_data = market_info.data.borrow();
     let market_state = MarketState::try_from_slice(&market_data)?;
     drop(market_data);
-    
+
     if *base_vault_info.key != market_state.base_vault {
         msg!(
             "Base vault mismatch. Expected: {}, Got: {}",
@@ -262,8 +268,8 @@ pub fn process_create_acc_and_deposit_base_tokens(
     }
 
     let rent = Rent::from_account_info(rent_info)?;
-    let account_exists = user_balance_info.lamports() > 0
-        && user_balance_info.data_len() == UserBalance::LEN;
+    let account_exists =
+        user_balance_info.lamports() > 0 && user_balance_info.data_len() == UserBalance::LEN;
 
     if !account_exists {
         msg!(
@@ -340,10 +346,16 @@ pub fn process_create_acc_and_deposit_base_tokens(
             let mut user_balance = UserBalance::try_from_slice(&balance_data)?;
             user_balance.available_base_balance += quantity;
             user_balance.serialize(&mut *balance_data)?;
-            msg!("Updated existing account, new base balance: {}", user_balance.available_base_balance);
+            msg!(
+                "Updated existing account, new base balance: {}",
+                user_balance.available_base_balance
+            );
         }
 
-        msg!("Successfully deposited {} base tokens to user balance", quantity);
+        msg!(
+            "Successfully deposited {} base tokens to user balance",
+            quantity
+        );
     }
 
     Ok(())
