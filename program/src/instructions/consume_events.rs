@@ -109,28 +109,22 @@ pub fn process_consume_events(program_id: &Pubkey, accounts: &[AccountInfo]) -> 
             if maker_balance.owner == event.maker {
                 match event.event_type {
                     EventType::Fill => {
-                        if event.side == Side::Buy {
-                            maker_balance.locked_base_balance -= event.quantity;
-                            maker_balance.pending_quote_balance += event.quantity * event.price;
-                            msg!(
-                                "Maker sold: -{} base, +{} quote pending",
-                                event.quantity,
-                                event.quantity * event.price
-                            );
-                        } else {
-                            maker_balance.locked_quote_balance -= event.quantity * event.price;
+                        let quote_amount = (event.quantity * event.price) / 1_000_000_000;
+                        if event.side == Side::Sell {
+                            // maker = buyer
+                            maker_balance.locked_quote_balance -= quote_amount;
                             maker_balance.pending_base_balance += event.quantity;
-                            msg!(
-                                "Maker bought: +{} base pending, -{} quote",
-                                event.quantity,
-                                event.quantity * event.price
-                            );
+                        } else {
+                            // maker = seller
+                            maker_balance.locked_base_balance -= event.quantity;
+                            maker_balance.pending_quote_balance += quote_amount;
                         }
                     }
                     EventType::Out => {
+                        let quote_amount = (event.quantity * event.price) / 1_000_000_000;
                         if event.side == Side::Buy {
-                            maker_balance.locked_quote_balance -= event.quantity * event.price;
-                            maker_balance.available_quote_balance += event.quantity * event.price;
+                            maker_balance.locked_quote_balance -= quote_amount;
+                            maker_balance.available_quote_balance += quote_amount;
                         } else {
                             maker_balance.locked_base_balance -= event.quantity;
                             maker_balance.available_base_balance += event.quantity;
@@ -161,22 +155,23 @@ pub fn process_consume_events(program_id: &Pubkey, accounts: &[AccountInfo]) -> 
                 let mut taker_balance =
                     UserBalance::try_from_slice(&taker_balance_info.data.borrow())?;
 
-                if taker_balance.owner == event.taker {
+              if taker_balance.owner == event.taker {
+                    let quote_amount = (event.quantity * event.price) / 1_000_000_000;
                     if event.side == Side::Buy {
-                        taker_balance.locked_quote_balance -= event.quantity * event.price;
+                        taker_balance.locked_quote_balance -= quote_amount;
                         taker_balance.pending_base_balance += event.quantity;
                         msg!(
                             "Taker bought: +{} base pending, -{} quote",
                             event.quantity,
-                            event.quantity * event.price
+                            quote_amount
                         );
                     } else {
                         taker_balance.locked_base_balance -= event.quantity;
-                        taker_balance.pending_quote_balance += event.quantity * event.price;
+                        taker_balance.pending_quote_balance += quote_amount;
                         msg!(
                             "Taker sold: -{} base, +{} quote pending",
                             event.quantity,
-                            event.quantity * event.price
+                            quote_amount
                         );
                     }
 
