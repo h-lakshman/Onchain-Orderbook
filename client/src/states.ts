@@ -45,6 +45,7 @@ export const InstructionSchema = rustEnum([
   struct([u8("side"), u64("price"), u64("quantity")], "PlaceOrder"),
   struct([], "ConsumeEvents"),
   struct([], "SettleBalance"),
+  struct([u64("order_id")], "CancelOrder"),
 ]);
 
 export const UserBalanceSchema = struct([

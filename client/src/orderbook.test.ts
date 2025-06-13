@@ -1042,7 +1042,7 @@ test("Place buy order,Place sell order, Check market events", async () => {
     throw new Error("Consume events failed");
   }
 
-  console.log("✅ Events consumed successfully!");
+  console.log("Events consumed successfully!");
 
   // check pending balance in user_balance pda after consume events
   const userBalanceAfterConsume = svm.getAccount(userBalancePda);
@@ -1174,4 +1174,420 @@ test("Settle Balance for User", async () => {
   expect(userBalanceDataAfter.pending_base_balance.eq(new BN(0))).toBeTrue();
   expect(userBalanceDataAfter.pending_quote_balance.eq(new BN(0))).toBeTrue();
   console.log("Settle balance test passed!");
+});
+
+test("Cancel buy order", async () => {
+  const {
+    svm,
+    programId,
+    user,
+    marketAccountPda,
+    userBalancePda,
+    bidsPda,
+    asksPda,
+    marketEventsPda,
+    userBaseTokenAccount,
+    userQuoteTokenAccount,
+    baseVaultPda,
+    quoteVaultPda,
+  } = testEnv;
+
+  // place order to cancel it
+  const price = new BN(30_000_000);
+  const quantity = new BN(LAMPORTS_PER_SOL); // 1 SOL
+
+  const placeOrderDataBuffer = Buffer.alloc(18);
+  InstructionSchema.encode(
+    {
+      PlaceOrder: {
+        side: 0, // Buy
+        price: price,
+        quantity: quantity,
+      },
+    },
+    placeOrderDataBuffer
+  );
+
+  const placeOrderIx = new TransactionInstruction({
+    programId: programId.publicKey,
+    data: placeOrderDataBuffer,
+    keys: [
+      { pubkey: user.publicKey, isSigner: true, isWritable: false },
+      { pubkey: userBalancePda, isSigner: false, isWritable: true },
+      { pubkey: marketAccountPda, isSigner: false, isWritable: true },
+      { pubkey: bidsPda, isSigner: false, isWritable: true },
+      { pubkey: asksPda, isSigner: false, isWritable: true },
+      { pubkey: marketEventsPda, isSigner: false, isWritable: true },
+      { pubkey: userBaseTokenAccount, isSigner: false, isWritable: true },
+      { pubkey: userQuoteTokenAccount, isSigner: false, isWritable: true },
+      { pubkey: baseVaultPda, isSigner: false, isWritable: true },
+      { pubkey: quoteVaultPda, isSigner: false, isWritable: true },
+      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+      {
+        pubkey: new PublicKey("SysvarC1ock11111111111111111111111111111111"),
+        isSigner: false,
+        isWritable: false,
+      },
+    ],
+  });
+
+  const placeOrderTx = new Transaction().add(placeOrderIx);
+  placeOrderTx.feePayer = user.publicKey;
+  placeOrderTx.recentBlockhash = await svm.latestBlockhash();
+  placeOrderTx.sign(user);
+
+  await svm.sendTransaction(placeOrderTx);
+  console.log("Buy order placed for cancellation test");
+
+  const userBalanceBefore = svm.getAccount(userBalancePda);
+  const userBalanceDataBefore = UserBalanceSchema.decode(
+    Buffer.from(userBalanceBefore!.data)
+  );
+
+  console.log("\nUser Balance Before Cancel:");
+  console.log(
+    `Available Quote: ${userBalanceDataBefore.available_quote_balance.div(
+      new BN(1_000_000)
+    )} USDC`
+  );
+  console.log(
+    `Locked Quote: ${userBalanceDataBefore.locked_quote_balance.div(
+      new BN(1_000_000)
+    )} USDC`
+  );
+
+  const marketAccount = svm.getAccount(marketAccountPda);
+  const marketData = MarketStateSchema.decode(Buffer.from(marketAccount!.data));
+  const orderIdToCancel = marketData.next_order_id.sub(new BN(1)); // Last order ID
+
+  console.log(`Trying to cancel order ID: ${orderIdToCancel.toString()}`);
+
+  const cancelOrderDataBuffer = Buffer.alloc(9);
+  InstructionSchema.encode(
+    {
+      CancelOrder: {
+        order_id: orderIdToCancel,
+      },
+    },
+    cancelOrderDataBuffer
+  );
+
+  const cancelOrderIx = new TransactionInstruction({
+    programId: programId.publicKey,
+    data: cancelOrderDataBuffer,
+    keys: [
+      { pubkey: user.publicKey, isSigner: true, isWritable: false },
+      { pubkey: userBalancePda, isSigner: false, isWritable: true },
+      { pubkey: marketAccountPda, isSigner: false, isWritable: true },
+      { pubkey: bidsPda, isSigner: false, isWritable: true },
+      { pubkey: asksPda, isSigner: false, isWritable: true },
+      { pubkey: marketEventsPda, isSigner: false, isWritable: true },
+      {
+        pubkey: new PublicKey("SysvarC1ock11111111111111111111111111111111"),
+        isSigner: false,
+        isWritable: false,
+      },
+    ],
+  });
+
+  const cancelOrderTx = new Transaction().add(cancelOrderIx);
+  cancelOrderTx.feePayer = user.publicKey;
+  cancelOrderTx.recentBlockhash = await svm.latestBlockhash();
+  cancelOrderTx.sign(user);
+
+  const cancelResult = await svm.sendTransaction(cancelOrderTx);
+  if (
+    cancelResult &&
+    typeof cancelResult === "object" &&
+    "err" in cancelResult
+  ) {
+    console.error("Cancel order failed:", cancelResult);
+    if (cancelResult.meta && cancelResult.meta().logs) {
+      console.log("Program logs:");
+      cancelResult
+        .meta()
+        .logs()
+        .forEach((log: string, index: number) => {
+          console.log(`${index + 1}: ${log}`);
+        });
+    }
+    throw new Error("Cancel order failed");
+  }
+
+  console.log("Buy order cancelled successfully!");
+
+  const userBalanceAfter = svm.getAccount(userBalancePda);
+  const userBalanceDataAfter = UserBalanceSchema.decode(
+    Buffer.from(userBalanceAfter!.data)
+  );
+
+  console.log("\nUser Balance After Cancel:");
+  console.log(
+    `Available Quote: ${userBalanceDataAfter.available_quote_balance.div(
+      new BN(1_000_000)
+    )} USDC`
+  );
+  console.log(
+    `Locked Quote: ${userBalanceDataAfter.locked_quote_balance.div(
+      new BN(1_000_000)
+    )} USDC`
+  );
+
+  const expectedAvailableQuote =
+    userBalanceDataBefore.available_quote_balance.add(
+      userBalanceDataBefore.locked_quote_balance
+    );
+  expect(
+    userBalanceDataAfter.available_quote_balance.eq(expectedAvailableQuote)
+  ).toBeTrue();
+  expect(userBalanceDataAfter.locked_quote_balance.eq(new BN(0))).toBeTrue();
+
+  const bidsAccount = svm.getAccount(bidsPda);
+  const bidsAccountData = Buffer.from(bidsAccount!.data);
+  const minSize = 32 + 1 + 4 + 8;
+
+  if (bidsAccountData.length >= minSize) {
+    const ordersLen = bidsAccountData.readUInt32LE(33);
+    const actualSize = minSize + ordersLen * 105;
+    const actualData = bidsAccountData.subarray(0, actualSize);
+    const bidsData = OrderbookSchema.decode(actualData);
+
+    const cancelledOrderExists = bidsData.orders.some(
+      (order: any) =>
+        order.order_id.eq(orderIdToCancel) && order.owner.equals(user.publicKey)
+    );
+    expect(cancelledOrderExists).toBeFalse();
+  }
+
+  console.log("Buy order cancellation test passed!");
+});
+
+test("Cancel sell order", async () => {
+  const {
+    svm,
+    programId,
+    user,
+    marketAccountPda,
+    userBalancePda,
+    bidsPda,
+    asksPda,
+    marketEventsPda,
+    userBaseTokenAccount,
+    userQuoteTokenAccount,
+    baseVaultPda,
+    quoteVaultPda,
+  } = testEnv;
+
+  // place a sell order to cancel
+  const price = new BN(45_000_000); // 45 USDC
+  const quantity = new BN(LAMPORTS_PER_SOL); // 1 SOL
+
+  const placeOrderDataBuffer = Buffer.alloc(18);
+  InstructionSchema.encode(
+    {
+      PlaceOrder: {
+        side: 1, // Sell
+        price: price,
+        quantity: quantity,
+      },
+    },
+    placeOrderDataBuffer
+  );
+
+  const placeOrderIx = new TransactionInstruction({
+    programId: programId.publicKey,
+    data: placeOrderDataBuffer,
+    keys: [
+      { pubkey: user.publicKey, isSigner: true, isWritable: false },
+      { pubkey: userBalancePda, isSigner: false, isWritable: true },
+      { pubkey: marketAccountPda, isSigner: false, isWritable: true },
+      { pubkey: bidsPda, isSigner: false, isWritable: true },
+      { pubkey: asksPda, isSigner: false, isWritable: true },
+      { pubkey: marketEventsPda, isSigner: false, isWritable: true },
+      { pubkey: userBaseTokenAccount, isSigner: false, isWritable: true },
+      { pubkey: userQuoteTokenAccount, isSigner: false, isWritable: true },
+      { pubkey: baseVaultPda, isSigner: false, isWritable: true },
+      { pubkey: quoteVaultPda, isSigner: false, isWritable: true },
+      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+      {
+        pubkey: new PublicKey("SysvarC1ock11111111111111111111111111111111"),
+        isSigner: false,
+        isWritable: false,
+      },
+    ],
+  });
+
+  const placeOrderTx = new Transaction().add(placeOrderIx);
+  placeOrderTx.feePayer = user.publicKey;
+  placeOrderTx.recentBlockhash = await svm.latestBlockhash();
+  placeOrderTx.sign(user);
+
+  await svm.sendTransaction(placeOrderTx);
+  console.log("Sell order placed for cancellation test");
+
+  const userBalanceBefore = svm.getAccount(userBalancePda);
+  const userBalanceDataBefore = UserBalanceSchema.decode(
+    Buffer.from(userBalanceBefore!.data)
+  );
+
+  console.log("\nUser Balance Before Cancel:");
+  console.log(
+    `Available Base: ${userBalanceDataBefore.available_base_balance.div(
+      new BN(LAMPORTS_PER_SOL)
+    )} SOL`
+  );
+  console.log(
+    `Locked Base: ${userBalanceDataBefore.locked_base_balance.div(
+      new BN(LAMPORTS_PER_SOL)
+    )} SOL`
+  );
+
+  const marketAccount = svm.getAccount(marketAccountPda);
+  const marketData = MarketStateSchema.decode(Buffer.from(marketAccount!.data));
+  const orderIdToCancel = marketData.next_order_id.sub(new BN(1)); // Last order ID
+
+  const cancelOrderDataBuffer = Buffer.alloc(9);
+  InstructionSchema.encode(
+    {
+      CancelOrder: {
+        order_id: orderIdToCancel,
+      },
+    },
+    cancelOrderDataBuffer
+  );
+
+  const cancelOrderIx = new TransactionInstruction({
+    programId: programId.publicKey,
+    data: cancelOrderDataBuffer,
+    keys: [
+      { pubkey: user.publicKey, isSigner: true, isWritable: false },
+      { pubkey: userBalancePda, isSigner: false, isWritable: true },
+      { pubkey: marketAccountPda, isSigner: false, isWritable: true },
+      { pubkey: bidsPda, isSigner: false, isWritable: true },
+      { pubkey: asksPda, isSigner: false, isWritable: true },
+      { pubkey: marketEventsPda, isSigner: false, isWritable: true },
+      {
+        pubkey: new PublicKey("SysvarC1ock11111111111111111111111111111111"),
+        isSigner: false,
+        isWritable: false,
+      },
+    ],
+  });
+
+  const cancelOrderTx = new Transaction().add(cancelOrderIx);
+  cancelOrderTx.feePayer = user.publicKey;
+  cancelOrderTx.recentBlockhash = await svm.latestBlockhash();
+  cancelOrderTx.sign(user);
+
+  const cancelResult = await svm.sendTransaction(cancelOrderTx);
+  if (
+    cancelResult &&
+    typeof cancelResult === "object" &&
+    "err" in cancelResult
+  ) {
+    console.error("Cancel sell order failed:", cancelResult);
+    throw new Error("Cancel sell order failed");
+  }
+
+  console.log("Sell order cancelled successfully!");
+
+  const userBalanceAfter = svm.getAccount(userBalancePda);
+  const userBalanceDataAfter = UserBalanceSchema.decode(
+    Buffer.from(userBalanceAfter!.data)
+  );
+
+  console.log("\nUser Balance After Cancel:");
+  console.log(
+    `Available Base: ${userBalanceDataAfter.available_base_balance.div(
+      new BN(LAMPORTS_PER_SOL)
+    )} SOL`
+  );
+  console.log(
+    `Locked Base: ${userBalanceDataAfter.locked_base_balance.div(
+      new BN(LAMPORTS_PER_SOL)
+    )} SOL`
+  );
+
+  const expectedAvailableBase =
+    userBalanceDataBefore.available_base_balance.add(
+      userBalanceDataBefore.locked_base_balance
+    );
+  expect(
+    userBalanceDataAfter.available_base_balance.eq(expectedAvailableBase)
+  ).toBeTrue();
+  expect(userBalanceDataAfter.locked_base_balance.eq(new BN(0))).toBeTrue();
+
+  const asksAccount = svm.getAccount(asksPda);
+  const asksAccountData = Buffer.from(asksAccount!.data);
+  const minSize = 32 + 1 + 4 + 8;
+
+  if (asksAccountData.length >= minSize) {
+    const ordersLen = asksAccountData.readUInt32LE(33);
+    const actualSize = minSize + ordersLen * 105;
+    const actualData = asksAccountData.subarray(0, actualSize);
+    const asksData = OrderbookSchema.decode(actualData);
+
+    const cancelledOrderExists = asksData.orders.some(
+      (order: any) =>
+        order.order_id.eq(orderIdToCancel) && order.owner.equals(user.publicKey)
+    );
+    expect(cancelledOrderExists).toBeFalse();
+  }
+
+  console.log("Sell order cancellation test passed!");
+});
+
+test("Cancel order - order not found", async () => {
+  const {
+    svm,
+    programId,
+    user,
+    marketAccountPda,
+    userBalancePda,
+    bidsPda,
+    asksPda,
+    marketEventsPda,
+  } = testEnv;
+
+  const nonExistentOrderId = new BN(999999);
+
+  const cancelOrderDataBuffer = Buffer.alloc(9);
+  InstructionSchema.encode(
+    {
+      CancelOrder: {
+        order_id: nonExistentOrderId,
+      },
+    },
+    cancelOrderDataBuffer
+  );
+
+  const cancelOrderIx = new TransactionInstruction({
+    programId: programId.publicKey,
+    data: cancelOrderDataBuffer,
+    keys: [
+      { pubkey: user.publicKey, isSigner: true, isWritable: false },
+      { pubkey: userBalancePda, isSigner: false, isWritable: true },
+      { pubkey: marketAccountPda, isSigner: false, isWritable: true },
+      { pubkey: bidsPda, isSigner: false, isWritable: true },
+      { pubkey: asksPda, isSigner: false, isWritable: true },
+      { pubkey: marketEventsPda, isSigner: false, isWritable: true },
+      {
+        pubkey: new PublicKey("SysvarC1ock11111111111111111111111111111111"),
+        isSigner: false,
+        isWritable: false,
+      },
+    ],
+  });
+
+  const cancelOrderTx = new Transaction().add(cancelOrderIx);
+  cancelOrderTx.feePayer = user.publicKey;
+  cancelOrderTx.recentBlockhash = await svm.latestBlockhash();
+  cancelOrderTx.sign(user);
+
+  const cancelResult = await svm.sendTransaction(cancelOrderTx);
+
+  expect(cancelResult).toBeDefined();
+  expect(typeof cancelResult === "object" && "err" in cancelResult).toBeTrue();
+
+  console.log("Cancel non-existent order correctly failed!");
 });
