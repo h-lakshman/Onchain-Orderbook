@@ -9,6 +9,7 @@ import {
   Keypair,
   LAMPORTS_PER_SOL,
   PublicKey,
+  SystemInstruction,
   SystemProgram,
   Transaction,
   TransactionInstruction,
@@ -17,7 +18,9 @@ import { expect, test, beforeAll } from "bun:test";
 import { LiteSVM } from "litesvm";
 import {
   InstructionSchema,
+  MARKET_EVENT_LEN,
   MarketStateSchema,
+  ORDERBOOK_LEN,
   OrderbookSchema,
   UserBalanceSchema,
 } from "./states";
@@ -53,7 +56,6 @@ beforeAll(async () => {
   const programId = Keypair.generate();
   const programPath =
     process.env.program_path || "../program/target/deploy/orderbook.so";
-  console.log("Using program path:", programPath);
   svm.addProgramFromFile(programId.publicKey, programPath);
 
   const authority = Keypair.generate();
@@ -340,6 +342,74 @@ beforeAll(async () => {
       marketAccountPda.toBuffer(),
     ],
     programId.publicKey
+  );
+
+  // Create large zero-copy accounts in client due to size
+  const bidsRent = svm.minimumBalanceForRentExemption(BigInt(ORDERBOOK_LEN));
+  const asksRent = svm.minimumBalanceForRentExemption(BigInt(ORDERBOOK_LEN));
+  const marketEventsRent = svm.minimumBalanceForRentExemption(
+    BigInt(MARKET_EVENT_LEN)
+  );
+
+  const createBidsAccountIx = SystemProgram.createAccount({
+    fromPubkey: authority.publicKey,
+    newAccountPubkey: bidsPda,
+    lamports: Number(bidsRent),
+    space: ORDERBOOK_LEN,
+    programId: programId.publicKey,
+  });
+
+  const createAsksAccountIx = SystemProgram.createAccount({
+    fromPubkey: authority.publicKey,
+    newAccountPubkey: asksPda,
+    lamports: Number(asksRent),
+    space: ORDERBOOK_LEN,
+    programId: programId.publicKey,
+  });
+
+  const createMarketEventsAccountIx = SystemProgram.createAccount({
+    fromPubkey: authority.publicKey,
+    newAccountPubkey: marketEventsPda,
+    lamports: Number(marketEventsRent),
+    space: MARKET_EVENT_LEN,
+    programId: programId.publicKey,
+  });
+
+  const createLargeAccountsTransaction = new Transaction()
+    .add(createBidsAccountIx)
+    .add(createAsksAccountIx)
+    .add(createMarketEventsAccountIx);
+
+  createLargeAccountsTransaction.feePayer = authority.publicKey;
+  createLargeAccountsTransaction.recentBlockhash = await svm.latestBlockhash();
+  createLargeAccountsTransaction.sign(authority);
+
+  const createAccountsResult = await svm.sendTransaction(
+    createLargeAccountsTransaction
+  );
+  if (
+    createAccountsResult &&
+    typeof createAccountsResult === "object" &&
+    "err" in createAccountsResult
+  ) {
+    throw new Error("Failed to create large zero-copy accounts");
+  }
+
+  console.log("zero-copy accounts created successfully:");
+  console.log(
+    `   Bids account: ${ORDERBOOK_LEN} bytes (~${Math.round(
+      ORDERBOOK_LEN / 1024
+    )}KB)`
+  );
+  console.log(
+    `   Asks account: ${ORDERBOOK_LEN} bytes (~${Math.round(
+      ORDERBOOK_LEN / 1024
+    )}KB)`
+  );
+  console.log(
+    `   Events account: ${MARKET_EVENT_LEN} bytes (~${Math.round(
+      MARKET_EVENT_LEN / 1024
+    )}KB)`
   );
 
   testEnv = {

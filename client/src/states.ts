@@ -21,8 +21,6 @@ export const MarketStateSchema = struct([
   publicKey("market_events"),
   publicKey("bids"),
   publicKey("asks"),
-  u64("event_head"),
-  u64("event_tail"),
   u64("min_order_size"),
   u64("tick_size"),
   u64("next_order_id"),
@@ -76,3 +74,6 @@ export const OrderbookSchema = struct([
   vec(OrderSchema, "orders"),
   u64("active_orders_count"),
 ]);
+
+export const MARKET_EVENT_LEN = 50232; // bytes
+export const ORDERBOOK_LEN = 100393; //bytes

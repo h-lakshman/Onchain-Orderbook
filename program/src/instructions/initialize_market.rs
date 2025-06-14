@@ -1,4 +1,4 @@
-use borsh::BorshSerialize;
+use borsh::{BorshDeserialize, BorshSerialize};
 use solana_program::{
     account_info::{next_account_info, AccountInfo},
     entrypoint::ProgramResult,
@@ -92,7 +92,7 @@ pub fn process_initialize_market(
     }
 
     let bids_seeds = &[b"bids", market_pda.as_ref()];
-    let (bids_pda, bids_bump) = Pubkey::find_program_address(bids_seeds, program_id);
+    let (bids_pda, _bids_bump) = Pubkey::find_program_address(bids_seeds, program_id);
 
     if bids_info.key != &bids_pda {
         msg!("Invalid bids account. Expected PDA: {}", bids_pda);
@@ -100,7 +100,7 @@ pub fn process_initialize_market(
     }
 
     let asks_seeds = &[b"asks", market_pda.as_ref()];
-    let (asks_pda, asks_bump) = Pubkey::find_program_address(asks_seeds, program_id);
+    let (asks_pda, _asks_bump) = Pubkey::find_program_address(asks_seeds, program_id);
 
     if asks_info.key != &asks_pda {
         msg!("Invalid asks account. Expected PDA: {}", asks_pda);
@@ -108,7 +108,7 @@ pub fn process_initialize_market(
     }
 
     let market_events_seeds = &[b"events", market_pda.as_ref()];
-    let (market_events_pda, events_bump) =
+    let (market_events_pda, _events_bump) =
         Pubkey::find_program_address(market_events_seeds, program_id);
 
     if market_events_info.key != &market_events_pda {
@@ -152,7 +152,110 @@ pub fn process_initialize_market(
         return Err(ProgramError::InvalidAccountData);
     }
 
+    if bids_info.owner != program_id {
+        msg!("Bids account must be owned by this program");
+        return Err(ProgramError::InvalidAccountData);
+    }
+
+    if asks_info.owner != program_id {
+        msg!("Asks account must be owned by this program");
+        return Err(ProgramError::InvalidAccountData);
+    }
+
+    if market_events_info.owner != program_id {
+        msg!("Market events account must be owned by this program");
+        return Err(ProgramError::InvalidAccountData);
+    }
+
+    if market_info.lamports() > 0 {
+        let market_data = MarketState::try_from_slice(&market_info.data.borrow())
+            .map_err(|_| ProgramError::InvalidAccountData)?;
+        if market_data.is_initialized {
+            msg!("Market is already initialized");
+            return Err(ProgramError::AccountAlreadyInitialized);
+        }
+    }
+
     let rent = Rent::from_account_info(rent_info)?;
+    let bids_rent = rent.minimum_balance(OrderBook::LEN);
+    let asks_rent = rent.minimum_balance(OrderBook::LEN);
+    let market_event_rent = rent.minimum_balance(MarketEvents::LEN);
+
+    if bids_info.lamports() < bids_rent {
+        msg!("Bids account doesn't have enough lamports to be rent exempt");
+        return Err(ProgramError::AccountNotRentExempt);
+    }
+
+    if asks_info.lamports() < asks_rent {
+        msg!("Asks account doesn't have enough lamports to be rent exempt");
+        return Err(ProgramError::AccountNotRentExempt);
+    }
+
+    if market_events_info.lamports() < market_event_rent {
+        msg!("Market events account doesn't have enough lamports to be rent exempt");
+        return Err(ProgramError::AccountNotRentExempt);
+    }
+
+    msg!("Initializing Bids Account");
+    {
+        let mut raw_data = bids_info.data.borrow_mut();
+        if raw_data.len() != OrderBook::LEN {
+            msg!(
+                "Bids account has incorrect size. Expected: {}, Got: {}",
+                OrderBook::LEN,
+                raw_data.len()
+            );
+            return Err(ProgramError::InvalidAccountData);
+        }
+
+        raw_data.fill(0);
+
+        let bids_account_data: &mut OrderBook = bytemuck::from_bytes_mut(&mut raw_data);
+        bids_account_data.market = market_pda;
+        bids_account_data.active_orders_count = 0;
+        bids_account_data.side = Side::Buy;
+    }
+
+    msg!("Initializing Asks Account");
+    {
+        let mut raw_data = asks_info.data.borrow_mut();
+        if raw_data.len() != OrderBook::LEN {
+            msg!(
+                "Asks account has incorrect size. Expected: {}, Got: {}",
+                OrderBook::LEN,
+                raw_data.len()
+            );
+            return Err(ProgramError::InvalidAccountData);
+        }
+
+        raw_data.fill(0);
+
+        let asks_account_data: &mut OrderBook = bytemuck::from_bytes_mut(&mut raw_data);
+        asks_account_data.market = market_pda;
+        asks_account_data.active_orders_count = 0;
+        asks_account_data.side = Side::Sell;
+    }
+
+    msg!("Initializing Market Events Account");
+    {
+        let mut raw_data = market_events_info.data.borrow_mut(); // Fixed: was using asks_info
+        if raw_data.len() != MarketEvents::LEN {
+            msg!(
+                "Market events account has incorrect size. Expected: {}, Got: {}",
+                MarketEvents::LEN,
+                raw_data.len()
+            );
+            return Err(ProgramError::InvalidAccountData);
+        }
+
+        raw_data.fill(0);
+
+        let market_events_data: &mut MarketEvents = bytemuck::from_bytes_mut(&mut raw_data);
+        market_events_data.market = market_pda;
+        market_events_data.count = 0;
+        market_events_data.seq_num = 0;
+        market_events_data.events_to_process = 0;
+    }
 
     if market_info.lamports() == 0 {
         msg!("Creating market account with {} bytes", MarketState::LEN);
@@ -178,70 +281,6 @@ pub fn process_initialize_market(
                 quote_mint_info.key.as_ref(),
                 &[bump],
             ]],
-        )?;
-    }
-
-    if bids_info.lamports() == 0 {
-        msg!("Creating bids account with {} bytes", OrderBook::LEN);
-        let bids_rent = rent.minimum_balance(OrderBook::LEN);
-        let create_bids_ix = system_instruction::create_account(
-            authority_info.key,
-            &bids_pda,
-            bids_rent,
-            OrderBook::LEN as u64,
-            program_id,
-        );
-        invoke_signed(
-            &create_bids_ix,
-            &[
-                authority_info.clone(),
-                bids_info.clone(),
-                system_program_info.clone(),
-            ],
-            &[&[b"bids", market_pda.as_ref(), &[bids_bump]]],
-        )?;
-    }
-
-    if asks_info.lamports() == 0 {
-        msg!("Creating asks account with {} bytes", OrderBook::LEN);
-        let asks_rent = rent.minimum_balance(OrderBook::LEN);
-        let create_asks_ix = system_instruction::create_account(
-            authority_info.key,
-            &asks_pda,
-            asks_rent,
-            OrderBook::LEN as u64,
-            program_id,
-        );
-        invoke_signed(
-            &create_asks_ix,
-            &[
-                authority_info.clone(),
-                asks_info.clone(),
-                system_program_info.clone(),
-            ],
-            &[&[b"asks", market_pda.as_ref(), &[asks_bump]]],
-        )?;
-    }
-
-    if market_events_info.lamports() == 0 {
-        msg!("Creating MINIMAL event queue for testing. Client must pre-create for production.");
-        let events_rent = rent.minimum_balance(MarketEvents::LEN);
-        let create_events_ix = system_instruction::create_account(
-            authority_info.key,
-            &market_events_pda,
-            events_rent,
-            MarketEvents::LEN as u64,
-            program_id,
-        );
-
-        invoke_signed(
-            &create_events_ix,
-            &[
-                authority_info.clone(),
-                market_events_info.clone(),
-                system_program_info.clone(),
-            ],
-            &[&[b"events", market_pda.as_ref(), &[events_bump]]],
         )?;
     }
 
@@ -383,8 +422,6 @@ pub fn process_initialize_market(
         base_vault: *base_vault_info.key,
         quote_vault: *quote_vault_info.key,
         market_events: *market_events_info.key,
-        event_head: 0,
-        event_tail: 0,
         min_order_size,
         tick_size,
         next_order_id: 1,
@@ -397,18 +434,6 @@ pub fn process_initialize_market(
 
     market_state.serialize(&mut *market_info.data.borrow_mut())?;
     msg!("MarketState serialized successfully");
-
-    let bids_book = OrderBook::new(market_pda, Side::Buy);
-    bids_book.serialize(&mut *bids_info.data.borrow_mut())?;
-    msg!("Bids account initialized successfully");
-
-    let asks_book = OrderBook::new(market_pda, Side::Sell);
-    asks_book.serialize(&mut *asks_info.data.borrow_mut())?;
-    msg!("Asks account initialized successfully");
-
-    let market_events = MarketEvents::new(market_pda);
-    market_events.serialize(&mut *market_events_info.data.borrow_mut())?;
-    msg!("MarketEvents account initialized");
 
     msg!("Market PDA: {}", market_pda);
     msg!("Bids PDA: {}", bids_pda);
