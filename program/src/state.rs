@@ -65,9 +65,10 @@ impl Event {
 
 #[repr(u8)]
 #[derive(BorshSerialize, BorshDeserialize, Debug, Clone, Copy, PartialEq)]
+#[borsh(use_discriminant = true)]
 pub enum EventType {
-    Fill,
-    Out,
+    Fill = 0,
+    Out = 1,
 }
 
 unsafe impl Pod for EventType {}
@@ -75,12 +76,13 @@ unsafe impl Zeroable for EventType {}
 
 pub const MAX_ORDERS: usize = 1024;
 
-#[derive(Debug, Clone, Copy)]
+#[repr(C, packed)]
+#[derive(Debug, Clone, Copy, Zeroable, Pod)]
 pub struct Order {
-    pub order_id: u64,
     pub owner: Pubkey,
     pub market: Pubkey,
     pub timestamp: i64,
+    pub order_id: u64,
     pub price: u64,
     pub quantity: u64,
     pub filled_quantity: u64,
@@ -89,9 +91,10 @@ pub struct Order {
 
 #[repr(u8)]
 #[derive(BorshSerialize, BorshDeserialize, Debug, Clone, Copy, PartialEq)]
+#[borsh(use_discriminant = true)]
 pub enum Side {
-    Buy,
-    Sell,
+    Buy = 1,
+    Sell = 2,
 }
 
 unsafe impl Pod for Side {}
@@ -100,14 +103,49 @@ unsafe impl Zeroable for Side {}
 #[repr(C, packed)]
 #[derive(Debug, Clone, Copy, Zeroable, Pod)]
 pub struct OrderBook {
-    pub orders: [Event; MAX_ORDERS],
+    pub orders: [Order; MAX_ORDERS],
     pub market: Pubkey,
     pub active_orders_count: u64,
     pub side: Side,
 }
 
 impl OrderBook {
-    pub const LEN: usize = (98 * MAX_ORDERS) + 32 + 8 + 1; // 100,393 bytes (~98KB)
+    pub const LEN: usize = (105 * MAX_ORDERS) + 32 + 8 + 1; // 107,561 bytes (~105KB)
+
+    pub fn add_order(&mut self, order: Order) -> ProgramResult {
+        if self.active_orders_count >= MAX_ORDERS as u64 {
+            return Err(ProgramError::Custom(2));
+        }
+
+        self.orders[self.active_orders_count as usize] = order;
+        self.active_orders_count += 1;
+        Ok(())
+    }
+
+    pub fn remove_order(&mut self, index: usize) -> ProgramResult {
+        if index >= self.active_orders_count as usize {
+            return Err(ProgramError::Custom(3));
+        }
+
+        let last_index = (self.active_orders_count - 1) as usize;
+        if index != last_index {
+            self.orders[index] = self.orders[last_index];
+        }
+
+        // Zero out the order properly 
+        self.orders[last_index] = Order {
+            owner: Pubkey::default(),
+            market: Pubkey::default(),
+            timestamp: 0,
+            order_id: 0,
+            price: 0,
+            quantity: 0,
+            filled_quantity: 0,
+            side: Side::Buy,
+        };
+        self.active_orders_count -= 1;
+        Ok(())
+    }
 }
 #[repr(C)]
 #[derive(Debug, Zeroable, Pod, Clone, Copy)]
@@ -121,4 +159,16 @@ pub struct MarketEvents {
 
 impl MarketEvents {
     pub const LEN: usize = (98 * MAX_EVENTS) + 32 + 8 + 8 + 8; // 50,232 bytes (~49KB)
+
+    pub fn add_event(&mut self, event: Event) -> ProgramResult {
+        if self.count >= MAX_EVENTS as u64 {
+            return Err(ProgramError::Custom(1));
+        }
+
+        self.events[self.count as usize] = event;
+        self.count += 1;
+        self.seq_num += 1;
+        self.events_to_process += 1;
+        Ok(())
+    }
 }

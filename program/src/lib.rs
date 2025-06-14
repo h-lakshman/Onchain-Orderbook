@@ -8,9 +8,13 @@ mod instructions;
 
 mod state;
 use instructions::{
-    process_consume_events, process_create_acc_and_deposit_base_tokens,
-    process_create_acc_and_deposit_quote_tokens, process_initialize_market, process_place_order,
-    process_settle_balance, process_cancel_order,
+    process_consume_events,
+    process_create_acc_and_deposit_base_tokens,
+    process_create_acc_and_deposit_quote_tokens,
+    process_initialize_market,
+    process_place_order,
+    process_settle_balance, 
+    process_cancel_order,
 };
 use state::Side;
 
@@ -78,14 +82,14 @@ fn process_instruction(
         Instruction::ConsumeEvents => {
             msg!("Instruction: Consume Events");
             process_consume_events(program_id, accounts)
-        }
-        Instruction::SettleBalance => {
-            msg!("Instruction: Settle Balance");
-            process_settle_balance(program_id, accounts)
-        }
-        Instruction::CancelOrder { order_id } => {
-            msg!("Instruction: Cancel Order");
-            process_cancel_order(program_id, accounts, order_id)
-        }
+        } 
+            Instruction::SettleBalance => {
+                  msg!("Instruction: Settle Balance");
+                  process_settle_balance(program_id, accounts)
+              }
+              Instruction::CancelOrder { order_id } => {
+                    msg!("Instruction: Cancel Order");
+                    process_cancel_order(program_id, accounts, order_id)
+                }
     }
 }

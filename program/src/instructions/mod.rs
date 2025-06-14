@@ -1,9 +1,9 @@
+pub mod cancel_order;
 pub mod consume_events;
 pub mod create_user_account;
 pub mod initialize_market;
 pub mod place_order;
 pub mod settle_balance;
-pub mod cancel_order;
 
 pub use consume_events::process_consume_events;
 pub use create_user_account::{

@@ -6,6 +6,7 @@ use solana_program::{
     program_error::ProgramError,
     pubkey::Pubkey,
 };
+use std::collections::HashMap;
 
 use crate::state::{EventType, MarketEvents, MarketState, Side, UserBalance};
 
@@ -24,40 +25,40 @@ pub fn process_consume_events(program_id: &Pubkey, accounts: &[AccountInfo]) -> 
     }
 
     let market_state = MarketState::try_from_slice(&market_info.data.borrow())?;
-    
-    // manual deserialization
-    let events_data = market_events_info.data.borrow();
-    
-    // MarketEvents: market(32) + head(8) + count(8) + seq_num(8) + events_to_process(8) + vec_len(4) + events
-    let min_size = 32 + 8 + 8 + 8 + 8 + 4; // 68 bytes for empty MarketEvents
-    let mut market_events = if events_data.len() >= min_size {
-        let events_len = u32::from_le_bytes([
-            events_data[64], events_data[65], events_data[66], events_data[67]
-        ]);
-        msg!("Events vector length: {}", events_len);
-        
-        // Each event is 98 bytes
-        let actual_size = min_size + (events_len as usize * 98);
-        msg!("Market events calculated actual data size: {}", actual_size);
-        
-        let actual_data = &events_data[0..actual_size];
-        let events = MarketEvents::try_from_slice(actual_data)?;
-        msg!("Market events deserialized successfully");
-        events
-    } else {
+    let (market_pda, _) = Pubkey::find_program_address(
+        &[
+            b"market",
+            market_state.base_mint.as_ref(),
+            market_state.quote_mint.as_ref(),
+        ],
+        program_id,
+    );
+
+    if *market_info.key != market_pda {
+        msg!("Invalid market account");
         return Err(ProgramError::InvalidAccountData);
-    };
-    drop(events_data);
+    }
+
+    if market_events_info.owner != program_id {
+        msg!("Market events account must be owned by this program");
+        return Err(ProgramError::InvalidAccountData);
+    }
 
     if market_state.consume_events_authority != *consume_events_authority_info.key {
         msg!("Invalid consume events authority");
         return Err(ProgramError::InvalidAccountData);
     }
 
-    // collect remaining pda's for lookup
     let remaining_accounts: Vec<&AccountInfo> = account_info_iter.collect();
+    let mut events_data = market_events_info.data.borrow_mut();
+    let market_events: &mut MarketEvents = bytemuck::from_bytes_mut(&mut events_data);
 
     let mut consumed_count: usize = 0;
+
+    let mut balance_accounts: HashMap<Pubkey, &AccountInfo> = HashMap::new();
+    for account_info in &remaining_accounts {
+        balance_accounts.insert(*account_info.key, account_info);
+    }
 
     msg!(
         "Starting event consumption. Events to process: {}",
@@ -68,16 +69,22 @@ pub fn process_consume_events(program_id: &Pubkey, accounts: &[AccountInfo]) -> 
         if i >= market_events.events.len() {
             break;
         }
-
         if consumed_count >= MAX_EVENTS_TO_CONSUME {
             msg!("Maximum event limit reached: {}", MAX_EVENTS_TO_CONSUME);
             break;
         }
 
         let event = &market_events.events[i];
+        
+        let event_maker = event.maker;
+        let event_taker = event.taker;
+        let event_type = event.event_type;
+        let event_side = event.side;
+        let event_quantity = event.quantity;
+        let event_price = event.price;
 
-        // skip empty/removed events
-        if event.maker == Pubkey::default() && event.taker == Pubkey::default() {
+        // Skip empty/removed events
+        if event_maker == Pubkey::default() && event_taker == Pubkey::default() {
             msg!("Skipping empty event at index {}", i);
             continue;
         }
@@ -85,137 +92,155 @@ pub fn process_consume_events(program_id: &Pubkey, accounts: &[AccountInfo]) -> 
         msg!(
             "Processing event {}: {} {} {} at {} price",
             i,
-            event.event_type as u8,
-            event.quantity,
-            event.side as u8,
-            event.price
+            event_type as u8,
+            event_quantity,
+            event_side as u8,
+            event_price
         );
 
-        let (maker_balance_pda, _) = Pubkey::find_program_address(
-            &[
-                b"user_balance",
-                event.maker.as_ref(),
-                market_info.key.as_ref(),
-            ],
-            program_id,
-        );
+        let quote_amount = (event_quantity * event_price) / 1_000_000_000;
 
-        if let Some(maker_balance_info) = remaining_accounts
-            .iter()
-            .find(|acc| *acc.key == maker_balance_pda)
-        {
-            let mut maker_balance = UserBalance::try_from_slice(&maker_balance_info.data.borrow())?;
+        match event_type {
+            EventType::Fill => {
+                // maker == taker ,self-trade
+                if event_maker == event_taker {
+                    msg!("Self-trade detected: maker == taker");
+                    
+                    let (user_balance_pda, _) = Pubkey::find_program_address(
+                        &[
+                            b"user_balance",
+                            event_maker.as_ref(),
+                            market_info.key.as_ref(),
+                        ],
+                        program_id,
+                    );
 
-            if maker_balance.owner == event.maker {
-                match event.event_type {
-                    EventType::Fill => {
-                        let quote_amount = (event.quantity * event.price) / 1_000_000_000;
-                        if event.side == Side::Sell {
-                            // maker = buyer
-                            maker_balance.locked_quote_balance -= quote_amount;
-                            maker_balance.pending_base_balance += event.quantity;
-                        } else {
-                            // maker = seller
-                            maker_balance.locked_base_balance -= event.quantity;
-                            maker_balance.pending_quote_balance += quote_amount;
+                    if let Some(user_balance_info) = balance_accounts.get(&user_balance_pda) {
+                        let mut user_balance = UserBalance::try_from_slice(&user_balance_info.data.borrow())?;
+                        
+                        if user_balance.owner == event_maker {
+                            if event_side == Side::Buy {
+                                user_balance.locked_quote_balance -= quote_amount;
+                                user_balance.available_quote_balance += quote_amount;
+                            } else {
+                                user_balance.locked_base_balance -= event_quantity;
+                                user_balance.available_base_balance += event_quantity;
+                            }
+                            
+                            user_balance.serialize(&mut *user_balance_info.data.borrow_mut())?;
+                            msg!("Self-trade balance updated - unlocked funds with no net change");
                         }
+                    } else {
+                        msg!("User balance account not found for self-trade");
                     }
-                    EventType::Out => {
-                        let quote_amount = (event.quantity * event.price) / 1_000_000_000;
-                        if event.side == Side::Buy {
+                } else {
+                    //normal trade
+                    let (maker_balance_pda, _) = Pubkey::find_program_address(
+                        &[
+                            b"user_balance",
+                            event_maker.as_ref(),
+                            market_info.key.as_ref(),
+                        ],
+                        program_id,
+                    );
+
+                    if let Some(maker_balance_info) = balance_accounts.get(&maker_balance_pda) {
+                        let mut maker_balance = UserBalance::try_from_slice(&maker_balance_info.data.borrow())?;
+
+                        if maker_balance.owner == event_maker {
+                            if event_side == Side::Buy {
+                                // Taker is buying, so maker is selling
+                                maker_balance.locked_base_balance -= event_quantity;
+                                maker_balance.pending_quote_balance += quote_amount;
+                                msg!("Maker sold: -{} base locked, +{} quote pending", event_quantity, quote_amount);
+                            } else {
+                                // Taker is selling, so maker is buying
+                                maker_balance.locked_quote_balance -= quote_amount;
+                                maker_balance.pending_base_balance += event_quantity;
+                                msg!("Maker bought: -{} quote locked, +{} base pending", quote_amount, event_quantity);
+                            }
+                            
+                            maker_balance.serialize(&mut *maker_balance_info.data.borrow_mut())?;
+                            msg!("Maker balance updated");
+                        }
+                    } else {
+                        msg!("Maker balance account not found, skipping maker settlement");
+                    }
+
+                    // Process taker's balance
+                    let (taker_balance_pda, _) = Pubkey::find_program_address(
+                        &[
+                            b"user_balance",
+                            event_taker.as_ref(),
+                            market_info.key.as_ref(),
+                        ],
+                        program_id,
+                    );
+
+                    if let Some(taker_balance_info) = balance_accounts.get(&taker_balance_pda) {
+                        let mut taker_balance = UserBalance::try_from_slice(&taker_balance_info.data.borrow())?;
+
+                        if taker_balance.owner == event_taker {
+                            if event_side == Side::Buy {
+                                // Taker is buying
+                                taker_balance.locked_quote_balance -= quote_amount;
+                                taker_balance.pending_base_balance += event_quantity;
+                                msg!("Taker bought: -{} quote locked, +{} base pending", quote_amount, event_quantity);
+                            } else {
+                                // Taker is selling
+                                taker_balance.locked_base_balance -= event_quantity;
+                                taker_balance.pending_quote_balance += quote_amount;
+                                msg!("Taker sold: -{} base locked, +{} quote pending", event_quantity, quote_amount);
+                            }
+
+                            taker_balance.serialize(&mut *taker_balance_info.data.borrow_mut())?;
+                            msg!("Taker balance updated");
+                        }
+                    } else {
+                        msg!("Taker balance account not found, skipping taker settlement");
+                    }
+                }
+            }
+            EventType::Out => {
+                // only for makers
+                let (maker_balance_pda, _) = Pubkey::find_program_address(
+                    &[
+                        b"user_balance",
+                        event_maker.as_ref(),
+                        market_info.key.as_ref(),
+                    ],
+                    program_id,
+                );
+
+                if let Some(maker_balance_info) = balance_accounts.get(&maker_balance_pda) {
+                    let mut maker_balance = UserBalance::try_from_slice(&maker_balance_info.data.borrow())?;
+
+                    if maker_balance.owner == event_maker {
+                        if event_side == Side::Buy {
+                            // cancelled buy order,unlock quote tokens
                             maker_balance.locked_quote_balance -= quote_amount;
                             maker_balance.available_quote_balance += quote_amount;
+                            msg!("Buy order cancelled: unlocked {} quote", quote_amount);
                         } else {
-                            maker_balance.locked_base_balance -= event.quantity;
-                            maker_balance.available_base_balance += event.quantity;
+                            // cancelled sell order,unlock base tokens
+                            maker_balance.locked_base_balance -= event_quantity;
+                            maker_balance.available_base_balance += event_quantity;
+                            msg!("Sell order cancelled: unlocked {} base", event_quantity);
                         }
+                        
+                        maker_balance.serialize(&mut *maker_balance_info.data.borrow_mut())?;
+                        msg!("Cancelled order balance updated");
                     }
+                } else {
+                    msg!("Maker balance account not found for cancelled order");
                 }
-                maker_balance.serialize(&mut *maker_balance_info.data.borrow_mut())?;
-                msg!("Maker balance updated");
-            }
-        } else {
-            msg!("Maker balance account not found, skipping maker settlement");
-        }
-
-        if event.event_type == EventType::Fill {
-            let (taker_balance_pda, _) = Pubkey::find_program_address(
-                &[
-                    b"user_balance",
-                    event.taker.as_ref(),
-                    market_info.key.as_ref(),
-                ],
-                program_id,
-            );
-
-            if let Some(taker_balance_info) = remaining_accounts
-                .iter()
-                .find(|acc| *acc.key == taker_balance_pda)
-            {
-                let mut taker_balance =
-                    UserBalance::try_from_slice(&taker_balance_info.data.borrow())?;
-
-              if taker_balance.owner == event.taker {
-                    let quote_amount = (event.quantity * event.price) / 1_000_000_000;
-                    if event.side == Side::Buy {
-                        taker_balance.locked_quote_balance -= quote_amount;
-                        taker_balance.pending_base_balance += event.quantity;
-                        msg!(
-                            "Taker bought: +{} base pending, -{} quote",
-                            event.quantity,
-                            quote_amount
-                        );
-                    } else {
-                        taker_balance.locked_base_balance -= event.quantity;
-                        taker_balance.pending_quote_balance += quote_amount;
-                        msg!(
-                            "Taker sold: -{} base, +{} quote pending",
-                            event.quantity,
-                            quote_amount
-                        );
-                    }
-
-                    taker_balance.serialize(&mut *taker_balance_info.data.borrow_mut())?;
-                    msg!("Taker balance updated");
-                }
-            } else {
-                msg!("Taker balance account not found, skipping taker settlement");
             }
         }
 
         consumed_count += 1;
         msg!("Event {} consumed successfully", i);
     }
-
-    // note: On-chain, vec.remove() doesn't actually deallocate memory, so we manually truncate.
-    //vec.remove shifts vec for each iteration so we shiift elements to front and truncate to reduce compute
-    if consumed_count > 0 {
-        msg!(
-            "Compacting event array. Consumed: {}, Remaining: {}",
-            consumed_count,
-            market_events.events_to_process - consumed_count as u64
-        );
-
-        let remaining_events = market_events.events_to_process as usize - consumed_count;
-
-        for i in 0..remaining_events {
-            let source_index = i + consumed_count;
-            if source_index < market_events.events.len() {
-                market_events.events[i] = market_events.events[source_index];
-            }
-        }
-
-        market_events.events_to_process -= consumed_count as u64;
-
-        market_events.events.truncate(remaining_events);
-
-        msg!(
-            "Array compaction completed. New size: {}",
-            market_events.events.len()
-        );
-    }
-
-    market_events.serialize(&mut *market_events_info.data.borrow_mut())?;
+    market_events.events_to_process = market_events.events_to_process.saturating_sub(consumed_count as u64);
 
     msg!(
         "Successfully consumed {} events. Remaining events: {}",

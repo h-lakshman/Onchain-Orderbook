@@ -91,34 +91,6 @@ pub fn process_initialize_market(
         return Err(ProgramError::InvalidAccountData);
     }
 
-    let bids_seeds = &[b"bids", market_pda.as_ref()];
-    let (bids_pda, _bids_bump) = Pubkey::find_program_address(bids_seeds, program_id);
-
-    if bids_info.key != &bids_pda {
-        msg!("Invalid bids account. Expected PDA: {}", bids_pda);
-        return Err(ProgramError::InvalidAccountData);
-    }
-
-    let asks_seeds = &[b"asks", market_pda.as_ref()];
-    let (asks_pda, _asks_bump) = Pubkey::find_program_address(asks_seeds, program_id);
-
-    if asks_info.key != &asks_pda {
-        msg!("Invalid asks account. Expected PDA: {}", asks_pda);
-        return Err(ProgramError::InvalidAccountData);
-    }
-
-    let market_events_seeds = &[b"events", market_pda.as_ref()];
-    let (market_events_pda, _events_bump) =
-        Pubkey::find_program_address(market_events_seeds, program_id);
-
-    if market_events_info.key != &market_events_pda {
-        msg!(
-            "Invalid market events account. Expected PDA: {}",
-            market_events_pda
-        );
-        return Err(ProgramError::InvalidAccountData);
-    }
-
     let base_vault_seeds = &[b"base_vault", market_pda.as_ref()];
     let (base_vault_pda, base_vault_bump) =
         Pubkey::find_program_address(base_vault_seeds, program_id);
@@ -436,9 +408,9 @@ pub fn process_initialize_market(
     msg!("MarketState serialized successfully");
 
     msg!("Market PDA: {}", market_pda);
-    msg!("Bids PDA: {}", bids_pda);
-    msg!("Asks PDA: {}", asks_pda);
-    msg!("Events PDA: {}", market_events_pda);
+    msg!("Bids PDA: {}", bids_info.key);
+    msg!("Asks PDA: {}", asks_info.key);
+    msg!("Events PDA: {}", market_info.key);
     msg!("Authority: {}", authority_info.key);
     msg!("Base mint: {}", base_mint_info.key);
     msg!("Quote mint: {}", quote_mint_info.key);

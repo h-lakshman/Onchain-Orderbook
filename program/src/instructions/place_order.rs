@@ -45,6 +45,21 @@ pub fn process_place_order(
         msg!("User must be a signer");
         return Err(ProgramError::MissingRequiredSignature);
     }
+
+    if bids_info.owner != program_id {
+        msg!("Bids account must be owned by this program");
+        return Err(ProgramError::InvalidAccountData);
+    }
+
+    if asks_info.owner != program_id {
+        msg!("Asks account must be owned by this program");
+        return Err(ProgramError::InvalidAccountData);
+    }
+
+    if market_events_info.owner != program_id {
+        msg!("Market events account must be owned by this program");
+        return Err(ProgramError::InvalidAccountData);
+    }
     let user_account_seeds = &[
         b"user_balance",
         user_info.key.as_ref(),
@@ -61,52 +76,6 @@ pub fn process_place_order(
     let mut market_state = MarketState::try_from_slice(&market_info.data.borrow())?;
     let mut user_balance = UserBalance::try_from_slice(&user_balance_info.data.borrow())?;
 
-    if user_balance.owner != *user_info.key {
-        msg!("User balance account does not belong to signer");
-        return Err(ProgramError::InvalidAccountData);
-    }
-
-    if user_balance.market != *market_info.key {
-        msg!("User balance account does not belong to this market");
-        return Err(ProgramError::InvalidAccountData);
-    }
-
-    let user_quote_token_data = user_quote_token_info.data.borrow();
-    if user_quote_token_data.len() < 32 {
-        msg!("Invalid user quote token account data");
-        return Err(ProgramError::InvalidAccountData);
-    }
-    let mut mint_bytes = [0u8; 32];
-    mint_bytes.copy_from_slice(&user_quote_token_data[0..32]);
-    let user_token_mint = Pubkey::new_from_array(mint_bytes);
-    if user_token_mint != market_state.quote_mint {
-        msg!(
-            "User quote token account mint mismatch. Expected: {}, Got: {}",
-            market_state.quote_mint,
-            user_token_mint
-        );
-        return Err(ProgramError::InvalidAccountData);
-    }
-    drop(user_quote_token_data);
-
-    let user_base_token_data = user_base_token_info.data.borrow();
-    if user_base_token_data.len() < 32 {
-        msg!("Invalid user base token account data");
-        return Err(ProgramError::InvalidAccountData);
-    }
-    let mut mint_bytes = [0u8; 32];
-    mint_bytes.copy_from_slice(&user_base_token_data[0..32]);
-    let user_token_mint = Pubkey::new_from_array(mint_bytes);
-    if user_token_mint != market_state.base_mint {
-        msg!(
-            "User base token account mint mismatch. Expected: {}, Got: {}",
-            market_state.base_mint,
-            user_token_mint
-        );
-        return Err(ProgramError::InvalidAccountData);
-    }
-    drop(user_base_token_data);
-
     let (market_pda, _) = Pubkey::find_program_address(
         &[
             b"market",
@@ -120,33 +89,54 @@ pub fn process_place_order(
         msg!("Invalid market account");
         return Err(ProgramError::InvalidAccountData);
     }
-
-    let bids_seeds = &[b"bids", market_pda.as_ref()];
-    let (bids_pda, _bids_bump) = Pubkey::find_program_address(bids_seeds, program_id);
-
-    if bids_info.key != &bids_pda {
-        msg!("Invalid bids account. Expected PDA: {}", bids_pda);
+    if user_balance.owner != *user_info.key {
+        msg!("User balance account does not belong to signer");
         return Err(ProgramError::InvalidAccountData);
     }
 
-    let asks_seeds = &[b"asks", market_pda.as_ref()];
-    let (asks_pda, _asks_bump) = Pubkey::find_program_address(asks_seeds, program_id);
-
-    if asks_info.key != &asks_pda {
-        msg!("Invalid asks account. Expected PDA: {}", asks_pda);
+    if user_balance.market != *market_info.key {
+        msg!("User balance account does not belong to this market");
         return Err(ProgramError::InvalidAccountData);
     }
 
-    let market_events_seeds = &[b"events", market_pda.as_ref()];
-    let (market_events_pda, _events_bump) =
-        Pubkey::find_program_address(market_events_seeds, program_id);
+    msg!("Checks on user quote token acc");
+    {
+        let user_quote_token_data = user_quote_token_info.data.borrow();
+        if user_quote_token_data.len() < 32 {
+            msg!("Invalid user quote token account data");
+            return Err(ProgramError::InvalidAccountData);
+        }
+        let mut mint_bytes = [0u8; 32];
+        mint_bytes.copy_from_slice(&user_quote_token_data[0..32]);
+        let user_token_mint = Pubkey::new_from_array(mint_bytes);
+        if user_token_mint != market_state.quote_mint {
+            msg!(
+                "User quote token account mint mismatch. Expected: {}, Got: {}",
+                market_state.quote_mint,
+                user_token_mint
+            );
+            return Err(ProgramError::InvalidAccountData);
+        }
+    }
 
-    if market_events_info.key != &market_events_pda {
-        msg!(
-            "Invalid market events account. Expected PDA: {}",
-            market_events_pda
-        );
-        return Err(ProgramError::InvalidAccountData);
+    msg!("Checks on user base token acc");
+    {
+        let user_base_token_data = user_base_token_info.data.borrow();
+        if user_base_token_data.len() < 32 {
+            msg!("Invalid user base token account data");
+            return Err(ProgramError::InvalidAccountData);
+        }
+        let mut mint_bytes = [0u8; 32];
+        mint_bytes.copy_from_slice(&user_base_token_data[0..32]);
+        let user_token_mint = Pubkey::new_from_array(mint_bytes);
+        if user_token_mint != market_state.base_mint {
+            msg!(
+                "User base token account mint mismatch. Expected: {}, Got: {}",
+                market_state.base_mint,
+                user_token_mint
+            );
+            return Err(ProgramError::InvalidAccountData);
+        }
     }
 
     let base_vault_seeds = &[b"base_vault", market_pda.as_ref()];
@@ -173,98 +163,12 @@ pub fn process_place_order(
         return Err(ProgramError::InvalidAccountData);
     }
 
-
-    msg!("Deserializing bids...");
-    let bids_data = bids_info.data.borrow();
-    msg!("Bids account data length: {}", bids_data.len());
-    
-    // Calculate actual data size for OrderBook
-    // OrderBook: market(32) + side(1) + vec_len(4) + orders + active_count(8)
-    let min_size = 32 + 1 + 4 + 8; // 45 bytes for empty OrderBook
-    let mut bids = if bids_data.len() >= min_size {
-        //notes for myself:- should've used anchor
-        //Orderbook :- market: 32 bytes (public key)
-        // side: 1 byte 
-        // vec_len: 4 bytes 
-        // orders: variable size 
-        // active_count: 8 bytes (counter)
-        //So:- Bytes 0-31:   market (Pubkey)           
-        // Byte 32:      side 
-        // Bytes 33-36:  orders.len() borsh adds this automatically   
-        // Bytes 37+:    actual orders data        
-        // Last 8 bytes: active_orders_count  
-        let orders_len = u32::from_le_bytes([
-            bids_data[33], bids_data[34], bids_data[35], bids_data[36]
-        ]);
-        msg!("Orders vector length: {}", orders_len);
-        
-        // Each order is: 105 bytes
-        let actual_size = min_size + (orders_len as usize * 105);
-        msg!("Calculated actual data size: {}", actual_size);
-        
-        let actual_data = &bids_data[0..actual_size];
-        let bids = OrderBook::try_from_slice(actual_data)?;
-        msg!("Bids deserialized successfully");
-        bids
-    } else {
-        return Err(ProgramError::InvalidAccountData);
-    };
-    drop(bids_data);
-    
-    msg!("Deserializing asks...");
-    let asks_data = asks_info.data.borrow();
-    msg!("Asks account data length: {}", asks_data.len());
-    
-    // Calculate actual data size for OrderBook (same logic as bids)
-    let min_size = 32 + 1 + 4 + 8; // 45 bytes
-    let mut asks = if asks_data.len() >= min_size {
-        // Read the orders vector length
-        let orders_len = u32::from_le_bytes([
-            asks_data[33], asks_data[34], asks_data[35], asks_data[36]
-        ]);
-        msg!("Asks orders vector length: {}", orders_len);
-        
-        // Each order is 105 bytes
-        let actual_size = min_size + (orders_len as usize * 105);
-        msg!("Asks calculated actual data size: {}", actual_size);
-        
-        let actual_data = &asks_data[0..actual_size];
-        let asks = OrderBook::try_from_slice(actual_data)?;
-        msg!("Asks deserialized successfully");
-        asks
-    } else {
-        return Err(ProgramError::InvalidAccountData);
-    };
-    drop(asks_data);
-    
-    msg!("Deserializing market events...");
-    let events_data = market_events_info.data.borrow();
-    msg!("Market events account data length: {}", events_data.len());
-    
-    // Calculate actual data size for MarketEvents
-    // MarketEvents: market(32) + head(8) + count(8) + seq_num(8) + events_to_process(8) + vec_len(4) + events
-    let min_size = 32 + 8 + 8 + 8 + 8 + 4; // 68 bytes for empty MarketEvents
-    let mut market_events = if events_data.len() >= min_size {
-        let events_len = u32::from_le_bytes([
-            events_data[64], events_data[65], events_data[66], events_data[67]
-        ]);
-        msg!("Events vector length: {}", events_len);
-        
-        // Each event is:98 bytes
-        let actual_size = min_size + (events_len as usize * 98);
-        msg!("Market events calculated actual data size: {}", actual_size);
-        
-        let actual_data = &events_data[0..actual_size];
-        let events = MarketEvents::try_from_slice(actual_data)?;
-        msg!("Market events deserialized successfully");
-        events
-    } else {
-        return Err(ProgramError::InvalidAccountData);
-    };
-    drop(events_data);
     let clock = Clock::from_account_info(clock_sysvar_info)?;
+    let mut bids_data = bids_info.data.borrow_mut();
+    let mut asks_data = asks_info.data.borrow_mut();
+    let mut bids: &mut OrderBook = bytemuck::from_bytes_mut(&mut bids_data);
+    let mut asks: &mut OrderBook = bytemuck::from_bytes_mut(&mut asks_data);
 
-    
     let (taker_book, maker_book) = if side == Side::Buy {
         (&mut bids, &mut asks)
     } else {
@@ -341,6 +245,8 @@ pub fn process_place_order(
     user_balance.available_quote_balance -= required_quote;
     user_balance.locked_quote_balance += required_quote;
 
+    let mut maker_events_data = market_events_info.data.borrow_mut();
+    let maker_events: &mut MarketEvents = bytemuck::from_bytes_mut(&mut maker_events_data);
     let mut remaining_quantity = quantity;
     let mut orders_to_remove = Vec::new();
 
@@ -376,13 +282,11 @@ pub fn process_place_order(
                     timestamp: clock.unix_timestamp,
                     side,
                 };
-                market_events.add_event(maker_fill_event)?;
 
-                msg!(
-                    "Filled {} quantity at {} price",
-                    fill_quantity,
-                    maker_order.price
-                );
+                maker_events.add_event(maker_fill_event)?;
+
+                let price = maker_order.price;
+                msg!("Filled {} quantity at {} price", fill_quantity, price);
 
                 if maker_order.filled_quantity == maker_order.quantity {
                     orders_to_remove.push(i);
@@ -392,8 +296,7 @@ pub fn process_place_order(
     }
 
     for &index in orders_to_remove.iter().rev() {
-        maker_book.orders.remove(index);
-        maker_book.active_orders_count -= 1;
+        maker_book.remove_order(index)?;
     }
 
     if remaining_quantity > 0 {
@@ -420,9 +323,6 @@ pub fn process_place_order(
     }
 
     user_balance.serialize(&mut *user_balance_info.data.borrow_mut())?;
-    bids.serialize(&mut *bids_info.data.borrow_mut())?;
-    asks.serialize(&mut *asks_info.data.borrow_mut())?;
-    market_events.serialize(&mut *market_events_info.data.borrow_mut())?;
     market_state.serialize(&mut *market_info.data.borrow_mut())?;
 
     msg!("Order placement completed successfully");
