@@ -8,6 +8,7 @@ import {
   rustEnum,
   vec,
   i64,
+  array,
 } from "@coral-xyz/borsh";
 
 export const MarketStateSchema = struct([
@@ -58,22 +59,22 @@ export const UserBalanceSchema = struct([
 ]);
 
 export const OrderSchema = struct([
-  u64("order_id"),
   publicKey("owner"),
   publicKey("market"),
-  u8("side"),
+  i64("timestamp"),
+  u64("order_id"),
   u64("price"),
   u64("quantity"),
   u64("filled_quantity"),
-  i64("timestamp"),
+  u8("side"),
 ]);
 
 export const OrderbookSchema = struct([
+  array(OrderSchema, 1024, "orders"),
   publicKey("market"),
-  u8("side"),
-  vec(OrderSchema, "orders"),
   u64("active_orders_count"),
+  u8("side"),
 ]);
 
 export const MARKET_EVENT_LEN = 50232; // bytes
-export const ORDERBOOK_LEN = 100393; //bytes
+export const ORDERBOOK_LEN = 107561; // bytes
